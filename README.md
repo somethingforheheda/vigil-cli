@@ -25,7 +25,9 @@
 VigilCLI sits in your menu bar and shows you everything happening across all your AI coding sessions in real time. When an agent needs permission to run a dangerous command, a chat bubble pops up so you can approve or deny — without switching windows.
 
 <p align="center">
-  <video src="assets/teachingVideo/demo.mp4" controls width="720"></video>
+  <a href="https://github.com/somethingforheheda/vigil-cli/blob/master/assets/teachingVideo/demo.mp4">
+    <img src="https://img.shields.io/badge/▶_Watch_Demo-grey?style=for-the-badge" alt="Watch Demo" />
+  </a>
 </p>
 
 ---
