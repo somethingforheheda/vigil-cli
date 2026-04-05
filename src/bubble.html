@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ── Light theme ── */
+html[data-theme="light"] {
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.10);
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.10), 0 1px 4px rgba(0, 0, 0, 0.06);
+  --text-primary: #18181b;
+  --text-muted: #6b7280;
+  --cmd-bg: #f3f4f6;
+  --cmd-border: rgba(0, 0, 0, 0.06);
+  --cmd-color: #374151;
+  --scroll-thumb: rgba(0, 0, 0, 0.12);
+  --scroll-thumb-hover: rgba(0, 0, 0, 0.22);
+  --btn-allow-bg: #4f46e5;
+  --btn-allow-hover: #4338ca;
+  --btn-deny-bg: #f3f4f6;
+  --btn-deny-color: #374151;
+  --btn-deny-border: rgba(0, 0, 0, 0.12);
+  --btn-deny-hover: #e5e7eb;
+  --sug-bg: transparent;
+  --sug-color: #6b7280;
+  --sug-border: rgba(0, 0, 0, 0.08);
+  --sug-hover-bg: #f3f4f6;
+  --sug-hover-color: #374151;
+}
+
+/* ── Dark theme ── */
+html[data-theme="dark"] {
+  --card-bg: #1c1c22;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.2);
+  --text-primary: #f0f0f5;
+  --text-muted: #888898;
+  --cmd-bg: #0e0e14;
+  --cmd-border: rgba(255, 255, 255, 0.05);
+  --cmd-color: #9898b0;
+  --scroll-thumb: rgba(255, 255, 255, 0.08);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.16);
+  --btn-allow-bg: #5c6fff;
+  --btn-allow-hover: #4a5fee;
+  --btn-deny-bg: rgba(255, 255, 255, 0.06);
+  --btn-deny-color: #d0d0e0;
+  --btn-deny-border: rgba(255, 255, 255, 0.08);
+  --btn-deny-hover: rgba(255, 255, 255, 0.10);
+  --sug-bg: transparent;
+  --sug-color: #888898;
+  --sug-border: rgba(255, 255, 255, 0.06);
+  --sug-hover-bg: rgba(255, 255, 255, 0.06);
+  --sug-hover-color: #e0e0f0;
+}
+
+/* ── Purple theme ── */
+html[data-theme="purple"] {
+  --card-bg: #1a0e2a;
+  --card-border: rgba(180, 130, 255, 0.14);
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(80, 0, 180, 0.12);
+  --text-primary: #ede0ff;
+  --text-muted: #9070c0;
+  --cmd-bg: #0e0818;
+  --cmd-border: rgba(180, 130, 255, 0.08);
+  --cmd-color: #a070d0;
+  --scroll-thumb: rgba(160, 100, 255, 0.14);
+  --scroll-thumb-hover: rgba(160, 100, 255, 0.26);
+  --btn-allow-bg: #9333ea;
+  --btn-allow-hover: #7e22ce;
+  --btn-deny-bg: rgba(180, 130, 255, 0.08);
+  --btn-deny-color: #ddc8ff;
+  --btn-deny-border: rgba(180, 130, 255, 0.14);
+  --btn-deny-hover: rgba(180, 130, 255, 0.14);
+  --sug-bg: transparent;
+  --sug-color: #9070c0;
+  --sug-border: rgba(180, 130, 255, 0.10);
+  --sug-hover-bg: rgba(180, 130, 255, 0.08);
+  --sug-hover-color: #ede0ff;
+}
+
+/* ── Ocean theme ── */
+html[data-theme="ocean"] {
+  --card-bg: #0a1828;
+  --card-border: rgba(60, 160, 255, 0.14);
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 80, 180, 0.12);
+  --text-primary: #d8f0ff;
+  --text-muted: #4888aa;
+  --cmd-bg: #05101e;
+  --cmd-border: rgba(60, 160, 255, 0.08);
+  --cmd-color: #5898c0;
+  --scroll-thumb: rgba(60, 160, 255, 0.14);
+  --scroll-thumb-hover: rgba(60, 160, 255, 0.26);
+  --btn-allow-bg: #0ea5e9;
+  --btn-allow-hover: #0284c7;
+  --btn-deny-bg: rgba(60, 160, 255, 0.08);
+  --btn-deny-color: #b8e0ff;
+  --btn-deny-border: rgba(60, 160, 255, 0.14);
+  --btn-deny-hover: rgba(60, 160, 255, 0.14);
+  --sug-bg: transparent;
+  --sug-color: #4888aa;
+  --sug-border: rgba(60, 160, 255, 0.10);
+  --sug-hover-bg: rgba(60, 160, 255, 0.08);
+  --sug-hover-color: #d8f0ff;
+}
+
+html, body {
+  width: 100%;
+  background: transparent;
+  overflow: visible;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Body layout: extra padding on arrow side ── */
+body {
+  padding: 6px;
+}
+body.side-left  { padding-left:  10px; }  /* arrow sticks out left  */
+body.side-right { padding-right: 10px; }  /* arrow sticks out right */
+
+/* ── Chat bubble card ── */
+.card {
+  position: relative;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: var(--card-shadow);
+  color: var(--text-primary);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.card.visible { opacity: 1; }
+.card.hiding  { opacity: 0; }
+
+/* ── Chat tail / arrow ── */
+/* side-left: tail on left edge, pointing LEFT toward window */
+body.side-left .card::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border: 9px solid transparent;
+  border-right: 9px solid var(--card-border);
+  border-left: 0;
+}
+body.side-left .card::after {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border: 7px solid transparent;
+  border-right: 7px solid var(--card-bg);
+  border-left: 0;
+}
+/* side-right: tail on right edge, pointing RIGHT toward window */
+body.side-right .card::before {
+  content: '';
+  position: absolute;
+  right: -9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border: 9px solid transparent;
+  border-left: 9px solid var(--card-border);
+  border-right: 0;
+}
+body.side-right .card::after {
+  content: '';
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0; height: 0;
+  border: 7px solid transparent;
+  border-left: 7px solid var(--card-bg);
+  border-right: 0;
+}
+
+/* ── Header row: tool pill + label ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tool-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #fff;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  background: #52525b;
+}
+/* ── Dark theme pills (blue-purple) ── */
+html[data-theme="dark"] .tool-pill[data-tool="Bash"]      { background: #5c6fff; }
+html[data-theme="dark"] .tool-pill[data-tool="Edit"]      { background: #3a60cc; }
+html[data-theme="dark"] .tool-pill[data-tool="Write"]     { background: #7c4dcc; }
+html[data-theme="dark"] .tool-pill[data-tool="Read"]      { background: #2a8a72; }
+html[data-theme="dark"] .tool-pill[data-tool="Glob"]      { background: #3a7a9a; }
+html[data-theme="dark"] .tool-pill[data-tool="Grep"]      { background: #3a7a9a; }
+html[data-theme="dark"] .tool-pill[data-tool="Agent"]     { background: #8844bb; }
+html[data-theme="dark"] .tool-pill[data-tool="CodexExec"] { background: #1a4ec0; }
+
+/* ── Light theme pills (indigo) ── */
+html[data-theme="light"] .tool-pill[data-tool="Bash"]      { background: #4f46e5; }
+html[data-theme="light"] .tool-pill[data-tool="Edit"]      { background: #2563eb; }
+html[data-theme="light"] .tool-pill[data-tool="Write"]     { background: #7c3aed; }
+html[data-theme="light"] .tool-pill[data-tool="Read"]      { background: #059669; }
+html[data-theme="light"] .tool-pill[data-tool="Glob"]      { background: #0891b2; }
+html[data-theme="light"] .tool-pill[data-tool="Grep"]      { background: #0891b2; }
+html[data-theme="light"] .tool-pill[data-tool="Agent"]     { background: #9333ea; }
+html[data-theme="light"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8; }
+
+/* ── Purple theme pills ── */
+html[data-theme="purple"] .tool-pill[data-tool="Bash"]      { background: #9333ea; }
+html[data-theme="purple"] .tool-pill[data-tool="Edit"]      { background: #6d28d9; }
+html[data-theme="purple"] .tool-pill[data-tool="Write"]     { background: #a855f7; }
+html[data-theme="purple"] .tool-pill[data-tool="Read"]      { background: #7c3aed; }
+html[data-theme="purple"] .tool-pill[data-tool="Glob"]      { background: #8b5cf6; }
+html[data-theme="purple"] .tool-pill[data-tool="Grep"]      { background: #8b5cf6; }
+html[data-theme="purple"] .tool-pill[data-tool="Agent"]     { background: #c026d3; }
+html[data-theme="purple"] .tool-pill[data-tool="CodexExec"] { background: #4f46e5; }
+
+/* ── Ocean theme pills (sky/cyan) ── */
+html[data-theme="ocean"] .tool-pill[data-tool="Bash"]      { background: #0ea5e9; }
+html[data-theme="ocean"] .tool-pill[data-tool="Edit"]      { background: #0284c7; }
+html[data-theme="ocean"] .tool-pill[data-tool="Write"]     { background: #0369a1; }
+html[data-theme="ocean"] .tool-pill[data-tool="Read"]      { background: #0891b2; }
+html[data-theme="ocean"] .tool-pill[data-tool="Glob"]      { background: #06b6d4; }
+html[data-theme="ocean"] .tool-pill[data-tool="Grep"]      { background: #06b6d4; }
+html[data-theme="ocean"] .tool-pill[data-tool="Agent"]     { background: #2563eb; }
+html[data-theme="ocean"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8; }
+.header-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Command block ── */
+.command-block {
+  padding: 8px 10px;
+  background: var(--cmd-bg);
+  border: 1px solid var(--cmd-border);
+  border-radius: 8px;
+  font-family: "SF Mono", "ui-monospace", "Cascadia Code", "Fira Code", monospace;
+  font-size: 11.5px;
+  color: var(--cmd-color);
+  line-height: 1.5;
+  max-height: 72px;
+  overflow-y: auto;
+  word-break: break-all;
+}
+.command-block::-webkit-scrollbar { width: 4px; }
+.command-block::-webkit-scrollbar-track { background: transparent; }
+.command-block::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 2px; }
+.command-block::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+
+/* ── Action buttons ── */
+.actions {
+  display: flex;
+  gap: 6px;
+}
+.btn {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  outline: none;
+}
+.btn:active:not(:disabled) { transform: scale(0.96); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-allow {
+  background: var(--btn-allow-bg);
+  color: #fff;
+}
+.btn-allow:hover:not(:disabled) { background: var(--btn-allow-hover); }
+
+.btn-deny {
+  background: var(--btn-deny-bg);
+  color: var(--btn-deny-color);
+  border-color: var(--btn-deny-border);
+}
+.btn-deny:hover:not(:disabled) { background: var(--btn-deny-hover); }
+
+/* ── Suggestion buttons ── */
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.btn-suggestion {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  background: var(--sug-bg);
+  color: var(--sug-color);
+  border: 1px solid var(--sug-border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  outline: none;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.btn-suggestion:hover:not(:disabled) {
+  background: var(--sug-hover-bg);
+  color: var(--sug-hover-color);
+}
+.btn-suggestion:active:not(:disabled) { transform: scale(0.98); }
+.btn-suggestion:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Divider ── */
+.divider {
+  height: 1px;
+  background: var(--card-border);
+  margin: 0 -2px;
+}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="header">
+    <span class="tool-pill" id="toolPill"></span>
+    <span class="header-label" id="headerLabel"></span>
+  </div>
+  <div class="command-block" id="commandBlock"></div>
+  <div class="divider" id="divider"></div>
+  <div class="actions">
+    <button class="btn btn-allow" id="btnAllow">Allow</button>
+    <button class="btn btn-deny"  id="btnDeny">Deny</button>
+  </div>
+  <div class="suggestions" id="suggestions"></div>
+</div>
+
+<script>
+const card          = document.getElementById("card");
+const toolPill      = document.getElementById("toolPill");
+const headerLabel   = document.getElementById("headerLabel");
+const commandBlock  = document.getElementById("commandBlock");
+const btnAllow      = document.getElementById("btnAllow");
+const btnDeny       = document.getElementById("btnDeny");
+const sugContainer  = document.getElementById("suggestions");
+const divider       = document.getElementById("divider");
+let elicitationMode = false;
+
+function parsePx(value) {
+  const n = Number.parseFloat(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function splitShadowList(value) {
+  return value.split(/,(?![^(]*\))/).map((part) => part.trim()).filter(Boolean);
+}
+
+function getShadowOutsets(el) {
+  const boxShadow = getComputedStyle(el).boxShadow;
+  if (!boxShadow || boxShadow === "none") {
+    return { top: 0, right: 0, bottom: 0, left: 0 };
+  }
+
+  let top = 0;
+  let right = 0;
+  let bottom = 0;
+  let left = 0;
+
+  for (const shadow of splitShadowList(boxShadow)) {
+    const lengths = shadow.match(/-?\d*\.?\d+px/g) || [];
+    if (lengths.length < 3) continue;
+    const offsetX = parsePx(lengths[0]);
+    const offsetY = parsePx(lengths[1]);
+    const blur = Math.abs(parsePx(lengths[2]));
+    const spread = lengths[3] ? parsePx(lengths[3]) : 0;
+    const extent = blur + spread;
+    left = Math.max(left, Math.max(0, extent - offsetX));
+    right = Math.max(right, Math.max(0, extent + offsetX));
+    top = Math.max(top, Math.max(0, extent - offsetY));
+    bottom = Math.max(bottom, Math.max(0, extent + offsetY));
+  }
+
+  return { top, right, bottom, left };
+}
+
+function formatDetail(name, input) {
+  if (!input || typeof input !== "object") return "";
+  if (name === "Bash" && input.command) return truncate(input.command, 200);
+  if ((name === "Edit" || name === "Write" || name === "Read") && input.file_path)
+    return truncate(input.file_path, 200);
+  if ((name === "Glob" || name === "Grep") && input.pattern)
+    return truncate(input.pattern, 200);
+  for (const v of Object.values(input)) {
+    if (typeof v === "string") return truncate(v, 160);
+  }
+  return truncate(JSON.stringify(input), 160);
+}
+
+function truncate(s, max) {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "\u2026";
+}
+
+function getSuggestionLabel(s, lang) {
+  if (s.type === "setMode") {
+    if (s.mode === "acceptEdits") return lang === "zh" ? "\u81EA\u52A8\u63A5\u53D7\u7F16\u8F91" : "Auto-accept edits";
+    if (s.mode === "plan") return lang === "zh" ? "\u5207\u6362\u5230 Plan \u6A21\u5F0F" : "Switch to plan mode";
+    return s.mode;
+  }
+  if (s.type === "addRules") {
+    const rule = Array.isArray(s.rules) && s.rules[0] ? s.rules[0] : s;
+    const rc = rule.ruleContent || s.ruleContent;
+    const tn = rule.toolName || s.toolName || "";
+    if (rc) {
+      if (rc.includes("**")) {
+        const dir = rc.split("**")[0].replace(/[\\/]$/, "").split(/[\\/]/).pop() || rc;
+        return lang === "zh" ? `\u5141\u8BB8 ${tn} \u5728 ${dir}/` : `Allow ${tn} in ${dir}/`;
+      }
+      const short = rc.length > 30 ? rc.slice(0, 29) + "\u2026" : rc;
+      return lang === "zh" ? `\u59CB\u7EC8\u5141\u8BB8 \`${short}\`` : `Always allow \`${short}\``;
+    }
+  }
+  return lang === "zh" ? "\u59CB\u7EC8\u5141\u8BB8" : "Always allow";
+}
+
+function disableAll() {
+  btnAllow.disabled = true;
+  btnDeny.disabled  = true;
+  for (const btn of sugContainer.children) btn.disabled = true;
+}
+
+function revealCard() {
+  card.classList.remove("hiding");
+  card.classList.add("visible");
+  // Double-rAF: wait two frames so layout is fully stable before measuring.
+  // A single rAF fires before the browser processes the class-change reflown,
+  // which can cause underestimation on the first paint.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const rect = card.getBoundingClientRect();
+    const bodyStyle = getComputedStyle(document.body);
+    const shadow = getShadowOutsets(card);
+    const paddingY = parsePx(bodyStyle.paddingTop) + parsePx(bodyStyle.paddingBottom);
+    // Only report height (shadow-aware). Keep width fixed at 340 to avoid card reflow.
+    const reportedHeight = Math.ceil(rect.height + paddingY + shadow.top + shadow.bottom);
+    window.bubbleAPI.reportHeight(reportedHeight);
+  }));
+}
+
+function show(data) {
+  // Apply theme and tail direction
+  if (data.theme)      document.documentElement.setAttribute("data-theme", data.theme);
+  if (data.bubbleSide) document.body.className = "side-" + data.bubbleSide;
+
+  elicitationMode = data.isElicitation || false;
+
+  // ── Elicitation: "Needs Input" mode ──
+  if (elicitationMode) {
+    toolPill.style.display  = "none";
+    headerLabel.textContent = data.lang === "zh" ? "\u9700\u8981\u8F93\u5165" : "Needs Input";
+    let questionText = "";
+    if (data.toolInput && Array.isArray(data.toolInput.questions)) {
+      questionText = data.toolInput.questions.map(q => q.question || "").filter(Boolean).join("\n");
+    }
+    commandBlock.textContent = questionText || JSON.stringify(data.toolInput);
+    btnAllow.textContent = data.lang === "zh" ? "\u524D\u5F80\u7EC8\u7AEF" : "Go to Terminal";
+    btnAllow.disabled = false;
+    btnDeny.style.display = "none";
+    divider.style.display = "none";
+    sugContainer.innerHTML = "";
+    revealCard();
+    return;
+  }
+
+  // ── Codex notify mode ──
+  if (data.toolName === "CodexExec") {
+    toolPill.textContent = "CODEX";
+    toolPill.setAttribute("data-tool", "CodexExec");
+    toolPill.style.display = "";
+    headerLabel.textContent = data.lang === "zh" ? "\u6743\u9650\u8BF7\u6C42" : "Permission";
+    commandBlock.textContent = (data.toolInput && data.toolInput.command) || "(unknown)";
+    btnAllow.textContent = data.lang === "zh" ? "\u77E5\u9053\u4E86" : "Got it";
+    btnAllow.disabled = false;
+    btnDeny.style.display = "none";
+    sugContainer.innerHTML = "";
+    revealCard();
+    return;
+  }
+
+  // ── Plan review mode ──
+  const isPlanReview = data.toolName === "ExitPlanMode";
+  if (isPlanReview) {
+    toolPill.style.display  = "none";
+    headerLabel.textContent = data.lang === "zh" ? "\u8BA1\u5212\u5BA1\u6279" : "Plan Review";
+    commandBlock.textContent = formatDetail(data.toolName, data.toolInput);
+    btnAllow.textContent = data.lang === "zh" ? "\u6279\u51C6" : "Approve";
+    btnDeny.style.display = "none";
+    btnAllow.disabled = false;
+    sugContainer.innerHTML = "";
+    // Add "Go to Terminal" suggestion
+    const btn = document.createElement("button");
+    btn.className = "btn-suggestion";
+    btn.textContent = data.lang === "zh" ? "\u524D\u5F80\u7EC8\u7AEF" : "Go to Terminal";
+    btn.addEventListener("click", () => { disableAll(); window.bubbleAPI.decide("deny-and-focus"); });
+    sugContainer.appendChild(btn);
+    revealCard();
+    return;
+  }
+
+  // ── Normal permission request ──
+  toolPill.textContent = data.toolName || "Tool";
+  toolPill.setAttribute("data-tool", data.toolName || "");
+  toolPill.style.display = "";
+  headerLabel.textContent = data.lang === "zh" ? "\u6743\u9650\u8BF7\u6C42" : "Permission";
+  commandBlock.textContent = formatDetail(data.toolName, data.toolInput);
+  btnAllow.textContent = data.lang === "zh" ? "\u6279\u51C6" : "Allow";
+  btnDeny.textContent  = data.lang === "zh" ? "\u62D2\u7EDD" : "Deny";
+  btnDeny.style.display = "";
+  btnAllow.disabled = false;
+  btnDeny.disabled  = false;
+  divider.style.display = "";
+
+  sugContainer.innerHTML = "";
+  if (Array.isArray(data.suggestions)) {
+    const seenLabels = new Set();
+    data.suggestions.forEach((s, i) => {
+      const label = getSuggestionLabel(s, data.lang);
+      if (seenLabels.has(label)) return;
+      seenLabels.add(label);
+      const btn = document.createElement("button");
+      btn.className = "btn-suggestion";
+      btn.textContent = label;
+      btn.addEventListener("click", () => { disableAll(); window.bubbleAPI.decide("suggestion:" + i); });
+      sugContainer.appendChild(btn);
+    });
+  }
+
+  revealCard();
+}
+
+function hide() {
+  card.classList.remove("visible");
+  card.classList.add("hiding");
+}
+
+btnAllow.addEventListener("click", () => {
+  btnAllow.textContent = "···";
+  disableAll();
+  window.bubbleAPI.decide(elicitationMode ? "deny" : "allow");
+});
+btnDeny.addEventListener("click", () => {
+  btnDeny.textContent = "···";
+  disableAll();
+  window.bubbleAPI.decide("deny");
+});
+
+window.bubbleAPI.onPermissionShow(show);
+window.bubbleAPI.onPermissionHide(hide);
+</script>
+</body>
+</html>

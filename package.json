@@ -1,0 +1,114 @@
+{
+  "name": "vigil-cli",
+  "version": "0.5.9",
+  "description": "Desktop session monitor for AI CLI tools (Claude Code, Codex, Cursor, etc.)",
+  "main": "src/main-entry.js",
+  "scripts": {
+    "start": "node launch.js",
+    "build": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder --win --mac --linux",
+    "build:ts": "tsc -p tsconfig.json",
+    "build:hooks": "node scripts/build-hooks.mjs",
+    "build:all-ts": "npm run build:ts && npm run build:hooks",
+    "test": "node --require tsx/cjs --test test/*.test.ts",
+    "install:gemini-hooks": "node hooks/dist/gemini-install.js",
+    "install:cursor-hooks": "node hooks/dist/cursor-install.js"
+  },
+  "keywords": [
+    "vigil-cli",
+    "desktop-monitor",
+    "electron",
+    "claude-code"
+  ],
+  "author": "somethingforheheda",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "commonjs",
+  "build": {
+    "appId": "com.vigilcli.app",
+    "productName": "VigilCLI",
+    "mac": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "artifactName": "VigilCLI-Setup-${version}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "maintainer": "somethingforheheda <somethingforheheda@users.noreply.github.com>",
+      "icon": "assets/icons",
+      "category": "Utility",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "files": [
+      "src/**/*",
+      "assets/tray-icon*.png",
+      "hooks/dist/**/*",
+      "extensions/**/*",
+      "agents/**/*"
+    ],
+    "asarUnpack": [
+      "hooks/dist/**/*",
+      "extensions/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "somethingforheheda",
+        "repo": "vigil-cli"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.10",
+    "electron": "^41.0.2",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "koffi": "^2.15.2"
+  }
+}

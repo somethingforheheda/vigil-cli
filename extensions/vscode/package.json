@@ -1,0 +1,15 @@
+{
+  "name": "vigilcli-terminal-focus",
+  "displayName": "VigilCLI Terminal Focus",
+  "description": "Enables VigilCLI desktop pet to focus the correct terminal tab via URI",
+  "version": "0.1.0",
+  "publisher": "vigilcli",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "activationEvents": [
+    "onUri"
+  ],
+  "main": "./extension.js",
+  "contributes": {}
+}
