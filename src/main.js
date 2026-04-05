@@ -333,7 +333,6 @@ const menuCtx = {
 const _menu = (0, menu_1.initMenu)(menuCtx);
 const { t, buildContextMenu, buildTrayMenu, rebuildAllMenus, createTray, showContextMenu, ensureContextMenuOwner, applyDockVisibility, sendPrefsToRenderer, } = _menu;
 // ── Auto-updater — delegated to src/updater.ts ──
-// updater.ts has not yet been ported — use dynamic require as interim
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _updater = null;
 function _loadUpdater() {
@@ -342,7 +341,7 @@ function _loadUpdater() {
     try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const mod = require("./updater");
-        _updater = mod({
+        _updater = mod.initUpdater({
             get dndEnabled() { return dndEnabled; },
             t,
             rebuildAllMenus,
