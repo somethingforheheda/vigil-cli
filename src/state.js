@@ -145,6 +145,22 @@ function initState(ctx) {
         if (returnMs !== undefined) {
             autoReturnTimer = setTimeout(() => {
                 autoReturnTimer = null;
+                // When thinking times out, also reset stuck thinking sessions in the map
+                // so pickDisplayState() can actually return idle instead of thinking.
+                if (state === "thinking") {
+                    const now = Date.now();
+                    let changed = false;
+                    for (const [, s] of sessions) {
+                        if (s.state === "thinking") {
+                            s.state = "idle";
+                            s.displaySvg = null;
+                            s.updatedAt = now;
+                            changed = true;
+                        }
+                    }
+                    if (changed)
+                        sendSessionsUpdate();
+                }
                 commitState(pickDisplayState());
             }, returnMs);
         }
@@ -309,6 +325,16 @@ function initState(ctx) {
         for (const [id, s] of sessions) {
             const age = now - s.updatedAt;
             if (s.pidReachable && s.agentPid && !isProcessAlive(s.agentPid)) {
+                if (!s.headless)
+                    removedNonHeadless = true;
+                sessions.delete(id);
+                changed = true;
+                continue;
+            }
+            // Fast cleanup: if source process died while session is in an active state,
+            // don't wait for WORKING_STALE_MS — clean up on the next cycle (~10s).
+            if ((s.state === "thinking" || s.state === "working" || s.state === "juggling") &&
+                s.pidReachable && s.sourcePid && !isProcessAlive(s.sourcePid)) {
                 if (!s.headless)
                     removedNonHeadless = true;
                 sessions.delete(id);

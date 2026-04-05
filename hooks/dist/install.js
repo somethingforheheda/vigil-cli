@@ -447,7 +447,7 @@ function registerHooks(options = {}) {
   if (added > 0 || changed) writeJsonAtomic(settingsPath, settings);
   if (!options.silent) {
     const versionLabel = versionInfo.status === "known" ? versionInfo.version : "unknown";
-    console.log(`Watch CLI hooks installed to ${settingsPath}`);
+    console.log(`VigilCLI hooks installed to ${settingsPath}`);
     console.log(`  Claude Code version: ${versionLabel}`);
     console.log(`  Added: ${added}, Updated: ${updated}, Skipped: ${skipped}, Removed: ${removed}`);
     if (versionSkipped > 0) console.log(`  Skipped versioned hooks: ${versionSkipped}`);

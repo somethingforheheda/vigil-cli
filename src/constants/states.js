@@ -42,6 +42,7 @@ exports.AUTO_RETURN_MS = {
     sweeping: 300000,
     notification: 2500,
     carrying: 3000,
+    thinking: 30_000,
 };
 /** States that show once and then auto-return to the resolved state */
 exports.ONESHOT_STATES = new Set([

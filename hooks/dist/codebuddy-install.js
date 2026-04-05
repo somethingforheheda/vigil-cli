@@ -176,7 +176,7 @@ function registerCodeBuddyHooks(options = {}) {
   const settingsPath = options.settingsPath ?? path2.join(os2.homedir(), ".codebuddy", "settings.json");
   const codebuddyDir = path2.dirname(settingsPath);
   if (!options.settingsPath && !fs2.existsSync(codebuddyDir)) {
-    if (!options.silent) console.log("Watch CLI: ~/.codebuddy/ not found \u2014 skipping CodeBuddy hook registration");
+    if (!options.silent) console.log("VigilCLI: ~/.codebuddy/ not found \u2014 skipping CodeBuddy hook registration");
     return { added: 0, skipped: 0, updated: 0 };
   }
   let hookScript = path2.resolve(__dirname, "..", "dist", "codebuddy-hook.js").replace(/\\/g, "/");
@@ -271,7 +271,7 @@ function registerCodeBuddyHooks(options = {}) {
     changed = true;
   }
   if (added > 0 || changed) writeJsonAtomic(settingsPath, settings);
-  if (!options.silent) console.log(`Watch CLI CodeBuddy hooks \u2192 ${settingsPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
+  if (!options.silent) console.log(`VigilCLI CodeBuddy hooks \u2192 ${settingsPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
   return { added, skipped, updated };
 }
 if (require.main === module) {

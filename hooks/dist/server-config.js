@@ -30,14 +30,14 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // hooks/src/server-config.ts
 var server_config_exports = {};
 __export(server_config_exports, {
-  VIGILCLI_SERVER_HEADER: () => VIGILCLI_SERVER_HEADER,
-  VIGILCLI_SERVER_ID: () => VIGILCLI_SERVER_ID,
   DEFAULT_SERVER_PORT: () => DEFAULT_SERVER_PORT,
   PERMISSION_PATH: () => PERMISSION_PATH,
   RUNTIME_CONFIG_PATH: () => RUNTIME_CONFIG_PATH,
   SERVER_PORTS: () => SERVER_PORTS,
   SERVER_PORT_COUNT: () => SERVER_PORT_COUNT,
   STATE_PATH: () => STATE_PATH,
+  VIGILCLI_SERVER_HEADER: () => VIGILCLI_SERVER_HEADER,
+  VIGILCLI_SERVER_ID: () => VIGILCLI_SERVER_ID,
   buildPermissionUrl: () => buildPermissionUrl,
   clearRuntimeConfig: () => clearRuntimeConfig,
   getPortCandidates: () => getPortCandidates,
@@ -320,14 +320,14 @@ function resolveNodeBin(options = {}) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  VIGILCLI_SERVER_HEADER,
-  VIGILCLI_SERVER_ID,
   DEFAULT_SERVER_PORT,
   PERMISSION_PATH,
   RUNTIME_CONFIG_PATH,
   SERVER_PORTS,
   SERVER_PORT_COUNT,
   STATE_PATH,
+  VIGILCLI_SERVER_HEADER,
+  VIGILCLI_SERVER_ID,
   buildPermissionUrl,
   clearRuntimeConfig,
   getPortCandidates,

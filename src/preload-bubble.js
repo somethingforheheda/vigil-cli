@@ -9,5 +9,4 @@ contextBridge.exposeInMainWorld("bubbleAPI", {
     decide: (behavior) => ipcRenderer.send(ipc_channels_1.IpcChannels.PERMISSION_DECIDE, behavior),
     onPermissionHide: (cb) => ipcRenderer.on(ipc_channels_1.IpcChannels.PERMISSION_HIDE, () => cb()),
     reportHeight: (h) => ipcRenderer.send(ipc_channels_1.IpcChannels.BUBBLE_HEIGHT, h),
-    reportSize: (size) => ipcRenderer.send(ipc_channels_1.IpcChannels.BUBBLE_HEIGHT, size),
 });

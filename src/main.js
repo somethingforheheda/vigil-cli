@@ -502,14 +502,21 @@ function createWindow() {
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.PERMISSION_DECIDE, (event, behavior) => _perm.handleDecide(event, behavior));
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.CARD_POSITIONS, (_event, positions) => {
         cardPositions = positions;
-        if (_perm.pendingPermissions.length > 0) _perm.stackBubbles();
+        if (_perm.pendingPermissions.length > 0)
+            _perm.stackBubbles();
     });
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.LIST_CONTENT_HEIGHT, (_event, contentHeight) => {
-        if (!listWin || listWin.isDestroyed()) return;
+        if (!listWin || listWin.isDestroyed())
+            return;
         const { x, y, width, height: oldH } = listWin.getBounds();
         const newH = Math.max(30, contentHeight > 0 ? contentHeight : 30);
-        if (Math.abs(newH - oldH) < 2) return;
-        if (listWinHeightAnim) { clearInterval(listWinHeightAnim); listWinHeightAnim = null; }
+        if (Math.abs(newH - oldH) < 2)
+            return;
+        // Cancel any in-progress animation
+        if (listWinHeightAnim) {
+            clearInterval(listWinHeightAnim);
+            listWinHeightAnim = null;
+        }
         const DURATION = 180;
         const INTERVAL = 16;
         const steps = Math.ceil(DURATION / INTERVAL);
@@ -517,13 +524,18 @@ function createWindow() {
         const easeOut = (t) => 1 - Math.pow(1 - t, 3);
         listWinHeightAnim = setInterval(() => {
             if (!listWin || listWin.isDestroyed()) {
-                clearInterval(listWinHeightAnim); listWinHeightAnim = null; return;
+                clearInterval(listWinHeightAnim);
+                listWinHeightAnim = null;
+                return;
             }
             step++;
             const t = easeOut(Math.min(step / steps, 1));
             const h = Math.round(oldH + (newH - oldH) * t);
-            listWin.setBounds({ x, y, width, height: h });
-            if (step >= steps) { clearInterval(listWinHeightAnim); listWinHeightAnim = null; }
+            listWin.setBounds({ x, y, width, height: h }); // Y fixed → grows downward
+            if (step >= steps) {
+                clearInterval(listWinHeightAnim);
+                listWinHeightAnim = null;
+            }
         }, INTERVAL);
     });
     // ── Renderer ready ──
@@ -599,7 +611,7 @@ else {
     });
     if (isMac && electron_1.app.dock) {
         const prefs = loadPrefs();
-        if (!(prefs && prefs.showDock === true))
+        if (prefs?.showDock !== true)
             electron_1.app.dock.hide();
     }
     electron_1.app.whenReady().then(() => {
@@ -628,6 +640,7 @@ else {
                     event,
                     cwd: extra.cwd,
                     agentId: "codex",
+                    title: extra.title ?? null,
                 });
             });
             _codexMonitor.start();

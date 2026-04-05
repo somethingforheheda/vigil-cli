@@ -200,7 +200,7 @@ function registerCursorHooks(options = {}) {
     changed = true;
   }
   if (added > 0 || changed) writeJsonAtomic(hooksPath, settings);
-  if (!options.silent) console.log(`Watch CLI Cursor hooks \u2192 ${hooksPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
+  if (!options.silent) console.log(`VigilCLI Cursor hooks \u2192 ${hooksPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
   return { added, skipped, updated };
 }
 if (require.main === module) {

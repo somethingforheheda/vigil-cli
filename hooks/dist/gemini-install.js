@@ -141,7 +141,7 @@ function registerGeminiHooks(options = {}) {
   const settingsPath = options.settingsPath ?? path2.join(os2.homedir(), ".gemini", "settings.json");
   const geminiDir = path2.dirname(settingsPath);
   if (!options.settingsPath && !fs2.existsSync(geminiDir)) {
-    if (!options.silent) console.log("Watch CLI: ~/.gemini/ not found \u2014 skipping Gemini hook registration");
+    if (!options.silent) console.log("VigilCLI: ~/.gemini/ not found \u2014 skipping Gemini hook registration");
     return { added: 0, skipped: 0, updated: 0 };
   }
   let hookScript = path2.resolve(__dirname, "..", "dist", "gemini-hook.js").replace(/\\/g, "/");
@@ -184,12 +184,12 @@ function registerGeminiHooks(options = {}) {
       }
       continue;
     }
-    arr.push({ type: "command", command: desiredCommand, name: "watch-cli" });
+    arr.push({ type: "command", command: desiredCommand, name: "vigil-cli" });
     added++;
     changed = true;
   }
   if (added > 0 || changed) writeJsonAtomic(settingsPath, settings);
-  if (!options.silent) console.log(`Watch CLI Gemini hooks \u2192 ${settingsPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
+  if (!options.silent) console.log(`VigilCLI Gemini hooks \u2192 ${settingsPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
   return { added, skipped, updated };
 }
 if (require.main === module) {

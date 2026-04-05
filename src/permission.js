@@ -114,7 +114,11 @@ function initPermission(ctx) {
         let step = 0;
         const easeOut = (t) => 1 - Math.pow(1 - t, 3);
         const timer = setInterval(() => {
-            if (win.isDestroyed()) { clearInterval(timer); bubbleAnimations.delete(win); return; }
+            if (win.isDestroyed()) {
+                clearInterval(timer);
+                bubbleAnimations.delete(win);
+                return;
+            }
             step++;
             const t = easeOut(Math.min(step / steps, 1));
             win.setBounds({
@@ -123,7 +127,10 @@ function initPermission(ctx) {
                 width: w,
                 height: h,
             });
-            if (step >= steps) { clearInterval(timer); bubbleAnimations.delete(win); }
+            if (step >= steps) {
+                clearInterval(timer);
+                bubbleAnimations.delete(win);
+            }
         }, INTERVAL);
         bubbleAnimations.set(win, { timer });
     }
@@ -137,10 +144,12 @@ function initPermission(ctx) {
         const cy = winBounds.y + winBounds.height / 2;
         const wa = ctx.getNearestWorkArea(cx, cy);
         if (ctx.bubbleFollowWindow) {
+            // Determine which side to place bubbles: if window center is left of screen center → right side, else left
             const screenMidX = wa.x + wa.width / 2;
             const windowOnLeft = cx < screenMidX;
             const windowGap = 2;
             const screenEdge = 10;
+            // Track next Y anchor per session to stack multiple bubbles from the same session
             const sessionYCursors = new Map();
             for (const perm of pendingPermissions) {
                 const bw = measuredBubbleWidths.get(perm) || 340;
@@ -165,7 +174,8 @@ function initPermission(ctx) {
                 if (perm.bubble && !perm.bubble.isDestroyed()) {
                     if (perm.bubble.isVisible()) {
                         animateBubbleTo(perm.bubble, Math.round(bx), Math.round(by), 340, bh);
-                    } else {
+                    }
+                    else {
                         perm.bubble.setBounds({ x: Math.round(bx), y: Math.round(by), width: 340, height: bh });
                     }
                 }
@@ -183,7 +193,8 @@ function initPermission(ctx) {
             if (perm.bubble && !perm.bubble.isDestroyed()) {
                 if (perm.bubble.isVisible()) {
                     animateBubbleTo(perm.bubble, Math.round(x), Math.round(y), 340, bh);
-                } else {
+                }
+                else {
                     perm.bubble.setBounds({ x: Math.round(x), y: Math.round(y), width: 340, height: bh });
                 }
             }
@@ -207,7 +218,6 @@ function initPermission(ctx) {
     function showPermissionBubble(permEntry) {
         const sugCount = (permEntry.suggestions || []).length;
         const bh = estimateBubbleHeight(sugCount);
-        console.log(`[bubble:show] sessionId=${permEntry.sessionId} toolName=${permEntry.toolName} estimateH=${bh} sugCount=${sugCount}`);
         // Temporary position — stackBubbles() will finalize after renderer reports real height
         const pos = { x: 0, y: 0, width: 340, height: bh };
         // Determine which side the bubble will appear on for the chat-bubble tail direction
@@ -219,7 +229,6 @@ function initPermission(ctx) {
             const wa = ctx.getNearestWorkArea(wcx, wcy);
             bubbleSide = wcx < wa.x + wa.width / 2 ? "left" : "right";
         }
-        console.log(`[bubble:show] bubbleSide=${bubbleSide} followWindow=${ctx.bubbleFollowWindow}`);
         const bub = new ElectronBrowserWindow({
             width: pos.width,
             height: pos.height,
@@ -246,8 +255,6 @@ function initPermission(ctx) {
             bub.setAlwaysOnTop(true, platform_1.TOPMOST_LEVEL_WIN);
         }
         bub.webContents.once("did-finish-load", () => {
-            // DEBUG: open DevTools to see renderer-side logs
-            bub.webContents.openDevTools({ mode: "detach" });
             bub.webContents.send(ipc_channels_1.IpcChannels.PERMISSION_SHOW, {
                 toolName: permEntry.toolName,
                 toolInput: permEntry.toolInput,
@@ -259,12 +266,8 @@ function initPermission(ctx) {
             });
             // Don't call bub.focus() — it steals focus from terminal and can trigger
             // false "User answered in terminal" denials in Claude Code, wasting tokens.
-            bub.showInactive();
-            // Linux WMs may reset skipTaskbar after showInactive — re-apply explicitly
-            if (isLinux)
-                bub.setSkipTaskbar(true);
-            // macOS: apply after showInactive() — it resets NSWindowCollectionBehavior
-            ctx.reapplyMacVisibility();
+            // NOTE: showInactive() is deferred to handleBubbleHeight so the bubble
+            // appears only after the shadow-aware height is set (no size-jump flash).
         });
         bub.loadFile(path.join(__dirname, "bubble.html"));
         stackBubbles();
@@ -352,13 +355,19 @@ function initPermission(ctx) {
         const perm = pendingPermissions.find((p) => p.bubble === senderWin);
         const height = typeof size === "number" ? size : size?.height;
         const width = typeof size === "number" ? undefined : size?.width;
-        console.log(`[bubble:height] received=${typeof size === "number" ? size : `${width}/${height}`} matched=${!!perm} prevMeasured=${perm?.measuredHeight}`);
         if (perm && typeof height === "number" && height > 0) {
             if (typeof width === "number" && width > 0) {
                 measuredBubbleWidths.set(perm, Math.ceil(width));
             }
             perm.measuredHeight = Math.ceil(height);
             stackBubbles();
+            // First time we know the real height: show the bubble now at correct size
+            if (perm.bubble && !perm.bubble.isDestroyed() && !perm.bubble.isVisible()) {
+                perm.bubble.showInactive();
+                if (isLinux)
+                    perm.bubble.setSkipTaskbar(true);
+                ctx.reapplyMacVisibility();
+            }
         }
     }
     function handleDecide(event, behavior) {

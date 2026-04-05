@@ -1,0 +1,21 @@
+export declare const VIGILCLI_SERVER_ID: string;
+export declare const VIGILCLI_SERVER_HEADER: string;
+export declare const DEFAULT_SERVER_PORT: number;
+export declare const SERVER_PORT_COUNT: number;
+export declare const SERVER_PORTS: number[];
+export declare const STATE_PATH: string;
+export declare const PERMISSION_PATH: string;
+export declare const RUNTIME_CONFIG_PATH: string;
+
+export declare function readHostPrefix(): string;
+export declare function readRuntimeConfig(): { port: number } | null;
+export declare function readRuntimePort(): number | null;
+export declare function writeRuntimeConfig(port: number): boolean;
+export declare function clearRuntimeConfig(filePath?: string): boolean;
+export declare function getPortCandidates(preferredPort?: number | number[], options?: Record<string, unknown>): number[];
+export declare function splitPortCandidates(preferredPort?: number | number[], options?: Record<string, unknown>): { direct: number[]; fallback: number[]; all: number[] };
+export declare function buildPermissionUrl(port: number): string;
+export declare function probePort(port: number, timeoutMs: number, callback: (ok: boolean) => void, options?: Record<string, unknown>): void;
+export declare function postStateToPort(port: number, payload: unknown, timeoutMs: number, callback: (ok: boolean) => void, options?: Record<string, unknown>): void;
+export declare function postStateToRunningServer(body: unknown, options: Record<string, unknown>, callback: (ok: boolean) => void): void;
+export declare function resolveNodeBin(options?: Record<string, unknown>): string;

@@ -46,10 +46,14 @@ class CodexLogMonitor {
     _interval = null;
     _tracked = new Map();
     _baseDir;
+    _sessionIndexPath;
+    _sessionIndexOffset = 0;
+    _sessionTitles = new Map(); // raw UUID → threadName
     constructor(agentConfig, onStateChange) {
         this._config = agentConfig;
         this._onStateChange = onStateChange;
         this._baseDir = this._resolveBaseDir();
+        this._sessionIndexPath = path.join(os.homedir(), ".codex", "session_index.jsonl");
     }
     _resolveBaseDir() {
         const dir = this._config.logConfig.sessionDir;
@@ -73,6 +77,7 @@ class CodexLogMonitor {
         this._tracked.clear();
     }
     _poll() {
+        this._pollSessionIndex();
         const dirs = this._getSessionDirs();
         for (const dir of dirs) {
             let files;
@@ -101,6 +106,62 @@ class CodexLogMonitor {
             }
         }
         this._cleanStaleFiles();
+    }
+    _pollSessionIndex() {
+        let stat;
+        try {
+            stat = fs.statSync(this._sessionIndexPath);
+        }
+        catch {
+            return;
+        }
+        if (stat.size <= this._sessionIndexOffset)
+            return;
+        let buf;
+        try {
+            const fd = fs.openSync(this._sessionIndexPath, "r");
+            const readLen = stat.size - this._sessionIndexOffset;
+            buf = Buffer.alloc(readLen);
+            fs.readSync(fd, buf, 0, readLen, this._sessionIndexOffset);
+            fs.closeSync(fd);
+        }
+        catch {
+            return;
+        }
+        this._sessionIndexOffset = stat.size;
+        const lines = buf.toString("utf8").split("\n");
+        for (const line of lines) {
+            if (!line.trim())
+                continue;
+            try {
+                const entry = JSON.parse(line);
+                if (entry.id && typeof entry.thread_name === "string" && entry.thread_name) {
+                    this._sessionTitles.set(entry.id, entry.thread_name);
+                }
+            }
+            catch {
+                continue;
+            }
+        }
+        // Update titles for already-tracked sessions and fire a callback if changed
+        for (const tracked of this._tracked.values()) {
+            const rawId = tracked.sessionId.startsWith("codex:")
+                ? tracked.sessionId.slice(6)
+                : tracked.sessionId;
+            const newTitle = this._sessionTitles.get(rawId) ?? null;
+            if (newTitle !== tracked.title) {
+                tracked.title = newTitle;
+                tracked.lastEventTime = Date.now();
+                if (tracked.lastState) {
+                    this._onStateChange(tracked.sessionId, tracked.lastState, "title-updated", {
+                        cwd: tracked.cwd,
+                        sourcePid: null,
+                        agentPid: null,
+                        title: tracked.title,
+                    });
+                }
+            }
+        }
     }
     _getSessionDirs() {
         const dirs = [];
@@ -137,6 +198,7 @@ class CodexLogMonitor {
                 partial: "",
                 hadToolUse: false,
                 approvalTimer: null,
+                title: this._sessionTitles.get(sessionId) ?? null,
             };
             this._tracked.set(filePath, tracked);
         }
@@ -203,7 +265,7 @@ class CodexLogMonitor {
             tracked.hadToolUse = false;
             tracked.lastState = resolved;
             tracked.lastEventTime = Date.now();
-            this._onStateChange(tracked.sessionId, resolved, key, { cwd: tracked.cwd, sourcePid: null, agentPid: null });
+            this._onStateChange(tracked.sessionId, resolved, key, { cwd: tracked.cwd, sourcePid: null, agentPid: null, title: tracked.title });
             return;
         }
         if (key === "response_item:function_call") {
@@ -218,6 +280,7 @@ class CodexLogMonitor {
                         cwd: tracked.cwd,
                         sourcePid: null,
                         agentPid: null,
+                        title: tracked.title,
                         permissionDetail: { command: cmd, rawPayload: payload },
                     });
                 }, APPROVAL_HEURISTIC_MS);
@@ -232,6 +295,7 @@ class CodexLogMonitor {
             cwd: tracked.cwd,
             sourcePid: null,
             agentPid: null,
+            title: tracked.title,
         });
     }
     _extractShellCommand(payload) {
@@ -259,13 +323,14 @@ class CodexLogMonitor {
     _cleanStaleFiles() {
         const now = Date.now();
         for (const [filePath, tracked] of this._tracked) {
-            if (now - tracked.lastEventTime > 300000) {
+            if (now - tracked.lastEventTime > 45000) {
                 if (tracked.approvalTimer)
                     clearTimeout(tracked.approvalTimer);
                 this._onStateChange(tracked.sessionId, "idle", "stale-cleanup", {
                     cwd: tracked.cwd,
                     sourcePid: null,
                     agentPid: null,
+                    title: tracked.title,
                 });
                 this._tracked.delete(filePath);
             }

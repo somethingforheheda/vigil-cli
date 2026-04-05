@@ -458,7 +458,6 @@ function initMenu(ctx) {
                 submenu: ctx.buildSessionSubmenu(),
             },
         ];
-        // macOS: Dock and Menu Bar visibility toggles
         template.push({ type: "separator" }, { label: t("quit"), click: () => requestAppQuit() });
         ctx.contextMenu = electron_1.Menu.buildFromTemplate(template);
     }
