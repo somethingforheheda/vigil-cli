@@ -1,6 +1,6 @@
 {
   "name": "vigil-cli",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "description": "Desktop session monitor for AI CLI tools (Claude Code, Codex, Cursor, etc.)",
   "main": "src/main-entry.js",
   "scripts": {
@@ -34,7 +34,6 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         }
