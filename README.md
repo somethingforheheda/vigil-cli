@@ -24,7 +24,9 @@
 
 VigilCLI sits in your menu bar and shows you everything happening across all your AI coding sessions in real time. When an agent needs permission to run a dangerous command, a chat bubble pops up so you can approve or deny — without switching windows.
 
-![Demo](assets/icon.png)
+<p align="center">
+  <video src="assets/teachingVideo/demo.mp4" controls width="720"></video>
+</p>
 
 ---
 
