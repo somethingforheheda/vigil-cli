@@ -94,6 +94,8 @@ let menuOpen = false;
 let _codexMonitor = null;
 let theme = "light";
 let fontSize = "large";
+let windowOpacity = 1.0;
+let listCollapsed = false;
 let cardPositions = null;
 const PREFS_PATH = path.join(electron_1.app.getPath("userData"), "vigilcli-prefs.json");
 function loadPrefs() {
@@ -119,6 +121,7 @@ function savePrefs() {
     const data = {
         x, y, lang, showTray, showDock, autoStartWithClaude,
         bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize,
+        windowOpacity, listCollapsed,
     };
     try {
         fs.writeFileSync(PREFS_PATH, JSON.stringify(data));
@@ -439,6 +442,10 @@ function createWindow() {
         theme = prefs.theme;
     if (prefs && typeof prefs.fontSize === "string")
         fontSize = prefs.fontSize;
+    if (prefs && typeof prefs.windowOpacity === "number")
+        windowOpacity = Math.min(1, Math.max(0.1, prefs.windowOpacity));
+    if (prefs && typeof prefs.listCollapsed === "boolean")
+        listCollapsed = prefs.listCollapsed;
     if (isMac)
         applyDockVisibility();
     let startX, startY;
@@ -478,6 +485,8 @@ function createWindow() {
     if (isWin)
         listWin.setAlwaysOnTop(true, platform_1.TOPMOST_LEVEL_WIN);
     listWin.loadFile(path.join(__dirname, "list.html"));
+    if (windowOpacity < 1)
+        listWin.setOpacity(windowOpacity);
     listWin.showInactive();
     if (isLinux)
         listWin.setSkipTaskbar(true);
@@ -537,12 +546,22 @@ function createWindow() {
             }
         }, INTERVAL);
     });
+    electron_1.ipcMain.on(ipc_channels_1.IpcChannels.LIST_COLLAPSED, (_event, value) => {
+        listCollapsed = value;
+        savePrefs();
+    });
+    electron_1.ipcMain.on(ipc_channels_1.IpcChannels.SET_OPACITY, (_event, value) => {
+        windowOpacity = Math.min(1, Math.max(0.1, value));
+        if (listWin && !listWin.isDestroyed())
+            listWin.setOpacity(windowOpacity);
+        savePrefs();
+    });
     // ── Renderer ready ──
     listWin.webContents.on("did-finish-load", () => {
         sendSessionsUpdate();
         if (dndEnabled)
             listWin.webContents.send(ipc_channels_1.IpcChannels.DND_CHANGE, true);
-        listWin.webContents.send(ipc_channels_1.IpcChannels.APPLY_PREFS, { theme, fontSize });
+        listWin.webContents.send(ipc_channels_1.IpcChannels.APPLY_PREFS, { theme, fontSize, collapsed: listCollapsed, windowOpacity });
         // Startup recovery: if no hook arrived yet, detect running agent processes
         if (sessions.size === 0 && !dndEnabled) {
             setTimeout(() => {

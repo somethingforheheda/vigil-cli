@@ -65,6 +65,8 @@ let menuOpen = false;
 let _codexMonitor: CodexLogMonitor | null = null;
 let theme = "light";
 let fontSize = "large";
+let windowOpacity = 1.0;
+let listCollapsed = false;
 let cardPositions: Record<string, { top: number; bottom: number; centerY: number }> | null = null;
 
 const PREFS_PATH = path.join(app.getPath("userData"), "vigilcli-prefs.json");
@@ -88,6 +90,7 @@ function savePrefs(): void {
   const data: AppPrefs & Record<string, unknown> = {
     x, y, lang, showTray, showDock, autoStartWithClaude,
     bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize,
+    windowOpacity, listCollapsed,
   };
   try { fs.writeFileSync(PREFS_PATH, JSON.stringify(data)); } catch { /* ignore */ }
 }
@@ -402,6 +405,8 @@ function createWindow(): void {
   if (prefs && typeof prefs.soundMuted         === "boolean") soundMuted         = prefs.soundMuted;
   if (prefs && typeof prefs.theme              === "string")  theme              = prefs.theme;
   if (prefs && typeof prefs.fontSize           === "string")  fontSize           = prefs.fontSize;
+  if (prefs && typeof prefs.windowOpacity      === "number")  windowOpacity      = Math.min(1, Math.max(0.1, prefs.windowOpacity));
+  if (prefs && typeof prefs.listCollapsed      === "boolean") listCollapsed      = prefs.listCollapsed;
 
   if (isMac) applyDockVisibility();
 
@@ -442,6 +447,7 @@ function createWindow(): void {
 
   if (isWin) listWin.setAlwaysOnTop(true, TOPMOST_LEVEL_WIN);
   listWin.loadFile(path.join(__dirname, "list.html"));
+  if (windowOpacity < 1) listWin.setOpacity(windowOpacity);
   listWin.showInactive();
   if (isLinux) listWin.setSkipTaskbar(true);
   reapplyMacVisibility();
@@ -492,11 +498,22 @@ function createWindow(): void {
     }, INTERVAL);
   });
 
+  ipcMain.on(IpcChannels.LIST_COLLAPSED, (_event, value: boolean) => {
+    listCollapsed = value;
+    savePrefs();
+  });
+
+  ipcMain.on(IpcChannels.SET_OPACITY, (_event, value: number) => {
+    windowOpacity = Math.min(1, Math.max(0.1, value));
+    if (listWin && !listWin.isDestroyed()) listWin.setOpacity(windowOpacity);
+    savePrefs();
+  });
+
   // ── Renderer ready ──
   listWin.webContents.on("did-finish-load", () => {
     sendSessionsUpdate();
     if (dndEnabled) listWin!.webContents.send(IpcChannels.DND_CHANGE, true);
-    listWin!.webContents.send(IpcChannels.APPLY_PREFS, { theme, fontSize });
+    listWin!.webContents.send(IpcChannels.APPLY_PREFS, { theme, fontSize, collapsed: listCollapsed, windowOpacity });
     // Startup recovery: if no hook arrived yet, detect running agent processes
     if (sessions.size === 0 && !dndEnabled) {
       setTimeout(() => {

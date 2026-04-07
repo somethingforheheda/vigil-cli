@@ -12,6 +12,8 @@ export const IpcChannels = {
   FOCUS_SESSION: "focus-session",
   CARD_POSITIONS: "card-positions",
   LIST_CONTENT_HEIGHT: "list-content-height",
+  LIST_COLLAPSED: "list-collapsed",
+  SET_OPACITY: "set-opacity",
 
   // Main → Bubble renderer
   PERMISSION_SHOW: "permission-show",

@@ -243,6 +243,58 @@
       color: var(--text-menu-btn-hover);
     }
 
+    /* ── Collapse / opacity icon buttons ── */
+    .icon-btn {
+      background: none;
+      border: none;
+      color: var(--text-menu-btn);
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-size: calc(12px * var(--font-scale));
+      line-height: 1;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .icon-btn:hover {
+      background: var(--bg-menu-btn-hover);
+      color: var(--text-menu-btn-hover);
+    }
+
+    /* ── Opacity panel ── */
+    .opacity-panel {
+      flex-shrink: 0;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 12px;
+      border-bottom: 1px solid var(--border-header);
+    }
+
+    .opacity-panel.visible { display: flex; }
+
+    .opacity-label {
+      font-size: calc(11px * var(--font-scale));
+      color: var(--text-count);
+      flex-shrink: 0;
+    }
+
+    .opacity-slider {
+      flex: 1;
+      height: 3px;
+      accent-color: var(--text-count-active);
+      cursor: pointer;
+    }
+
+    .opacity-value {
+      font-size: calc(11px * var(--font-scale));
+      color: var(--text-count-active);
+      font-variant-numeric: tabular-nums;
+      min-width: 30px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
     /* ── Session list ── */
     .list {
       flex: 1;
@@ -455,6 +507,10 @@
     }
 
     .dnd-bar.visible { display: block; }
+
+    /* ── Collapsed state ── */
+    .app.collapsed .list { display: none !important; }
+    .app.collapsed .dnd-bar { display: none !important; }
   </style>
 </head>
 <body>
@@ -466,8 +522,16 @@
       </div>
       <div class="header-right">
         <span class="count" id="count"></span>
+        <button class="icon-btn" id="opacity-btn" title="Opacity">◐</button>
+        <button class="icon-btn" id="collapse-btn" title="Collapse">▾</button>
         <button class="menu-btn" id="menu-btn" title="Menu">···</button>
       </div>
+    </div>
+
+    <div class="opacity-panel" id="opacity-panel">
+      <span class="opacity-label">透明度</span>
+      <input class="opacity-slider" id="opacity-slider" type="range" min="0.1" max="1" step="0.05" value="1">
+      <span class="opacity-value" id="opacity-value">100%</span>
     </div>
 
     <div class="list" id="list"></div>

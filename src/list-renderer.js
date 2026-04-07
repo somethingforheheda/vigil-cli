@@ -26,6 +26,7 @@ const STATE_CONFIG = {
 
 let sessions = [];
 let prevSessionIds = null; // null = first render, skip animation
+let collapsed = false;
 
 // ── Elapsed time formatting ──
 function formatElapsed(ms) {
@@ -67,16 +68,27 @@ function reportCardPositions() {
 // ── Report desired window height to main process (max 5 cards) ──
 const MAX_VISIBLE_CARDS = 5;
 function reportWindowHeight() {
-  const headerEl = document.querySelector(".header");
-  const listEl   = document.getElementById("list");
+  const headerEl      = document.querySelector(".header");
+  const opacityPanelEl = document.getElementById("opacity-panel");
+  const listEl        = document.getElementById("list");
   if (!headerEl || !listEl) return;
+
+  const opacityPanelH = (opacityPanelEl && opacityPanelEl.classList.contains("visible"))
+    ? opacityPanelEl.offsetHeight + 1  // +1 for border-bottom
+    : 0;
+
+  // Collapsed: only header (+ opacity panel if open)
+  if (collapsed) {
+    window.electronAPI.reportListHeight(headerEl.offsetHeight + 2 + opacityPanelH);
+    return;
+  }
 
   const cards = [...listEl.querySelectorAll(".card:not(.card-exit)")];
   const headerH = headerEl.offsetHeight + 1; // +1 for border-bottom
 
   if (cards.length === 0) {
     // No sessions: collapse to header strip only
-    window.electronAPI.reportListHeight(headerEl.offsetHeight + 2); // +2 for .app top/bottom border
+    window.electronAPI.reportListHeight(headerEl.offsetHeight + 2 + opacityPanelH); // +2 for .app top/bottom border
     return;
   }
 
@@ -85,7 +97,7 @@ function reportWindowHeight() {
   const visible  = cards.slice(0, MAX_VISIBLE_CARDS);
   const cardsH   = visible.reduce((sum, c) => sum + c.offsetHeight, 0)
                    + GAP * (visible.length - 1);
-  window.electronAPI.reportListHeight(headerH + LIST_PAD + cardsH);
+  window.electronAPI.reportListHeight(headerH + opacityPanelH + LIST_PAD + cardsH);
 }
 
 // ── Render all session cards ──
@@ -248,11 +260,65 @@ document.getElementById("menu-btn").addEventListener("click", () => {
   window.electronAPI.showContextMenu();
 });
 
+// ── Collapse button ──
+document.getElementById("collapse-btn").addEventListener("click", () => {
+  collapsed = !collapsed;
+  const appEl = document.querySelector(".app");
+  const collapseBtn = document.getElementById("collapse-btn");
+  const opacityPanel = document.getElementById("opacity-panel");
+  if (collapsed) {
+    appEl.classList.add("collapsed");
+    collapseBtn.textContent = "▴";
+    collapseBtn.title = "Expand";
+    opacityPanel.classList.remove("visible");
+  } else {
+    appEl.classList.remove("collapsed");
+    collapseBtn.textContent = "▾";
+    collapseBtn.title = "Collapse";
+  }
+  requestAnimationFrame(() => reportWindowHeight());
+  window.electronAPI.setCollapsed(collapsed);
+});
+
+// ── Opacity button ──
+document.getElementById("opacity-btn").addEventListener("click", () => {
+  const opacityPanel = document.getElementById("opacity-panel");
+  opacityPanel.classList.toggle("visible");
+  requestAnimationFrame(() => reportWindowHeight());
+});
+
+document.getElementById("opacity-slider").addEventListener("input", (e) => {
+  const val = parseFloat(e.target.value);
+  document.getElementById("opacity-value").textContent = Math.round(val * 100) + "%";
+  window.electronAPI.setOpacity(val);
+});
+
 // ── Theme & font size ──
 const FONT_SCALE_MAP = { small: 0.85, medium: 1.0, large: 1.2 };
-window.electronAPI.onApplyPrefs(({ theme, fontSize }) => {
+window.electronAPI.onApplyPrefs(({ theme, fontSize, collapsed: initCollapsed, windowOpacity: initOpacity }) => {
   if (theme)    document.documentElement.setAttribute("data-theme", theme);
   if (fontSize) document.documentElement.style.setProperty("--font-scale", FONT_SCALE_MAP[fontSize] ?? 1.0);
+  if (typeof initCollapsed === "boolean" && initCollapsed !== collapsed) {
+    collapsed = initCollapsed;
+    const appEl = document.querySelector(".app");
+    const collapseBtn = document.getElementById("collapse-btn");
+    if (collapsed) {
+      appEl.classList.add("collapsed");
+      collapseBtn.textContent = "▴";
+      collapseBtn.title = "Expand";
+    } else {
+      appEl.classList.remove("collapsed");
+      collapseBtn.textContent = "▾";
+      collapseBtn.title = "Collapse";
+    }
+    requestAnimationFrame(() => reportWindowHeight());
+  }
+  if (typeof initOpacity === "number") {
+    const slider = document.getElementById("opacity-slider");
+    const valEl  = document.getElementById("opacity-value");
+    slider.value = String(initOpacity);
+    valEl.textContent = Math.round(initOpacity * 100) + "%";
+  }
 });
 
 // ── Sound synthesis (Web Audio API — no files needed) ──

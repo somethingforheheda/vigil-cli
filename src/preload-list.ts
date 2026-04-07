@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer } = require("electron") as typeof import("ele
 import type { SessionSnapshot } from "./types/agent";
 import { IpcChannels } from "./constants/ipc-channels";
 
-type Prefs = { theme?: string; fontSize?: string };
+type Prefs = { theme?: string; fontSize?: string; collapsed?: boolean; windowOpacity?: number };
 type CardPositionMap = Record<string, { top: number; bottom: number; centerY: number }>;
 
 contextBridge.exposeInMainWorld("electronAPI", {
@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.send(IpcChannels.CARD_POSITIONS, positions),
   reportListHeight: (height: number) =>
     ipcRenderer.send(IpcChannels.LIST_CONTENT_HEIGHT, height),
+  setCollapsed: (collapsed: boolean) =>
+    ipcRenderer.send(IpcChannels.LIST_COLLAPSED, collapsed),
+  setOpacity: (opacity: number) =>
+    ipcRenderer.send(IpcChannels.SET_OPACITY, opacity),
   onPlaySound: (cb: (name: string) => void) =>
     ipcRenderer.on("play-sound", (_: Electron.IpcRendererEvent, name: string) => cb(name)),
 });

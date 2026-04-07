@@ -14,5 +14,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     onApplyPrefs: (cb) => ipcRenderer.on(ipc_channels_1.IpcChannels.APPLY_PREFS, (_, prefs) => cb(prefs)),
     reportCardPositions: (positions) => ipcRenderer.send(ipc_channels_1.IpcChannels.CARD_POSITIONS, positions),
     reportListHeight: (height) => ipcRenderer.send(ipc_channels_1.IpcChannels.LIST_CONTENT_HEIGHT, height),
+    setCollapsed: (collapsed) => ipcRenderer.send(ipc_channels_1.IpcChannels.LIST_COLLAPSED, collapsed),
+    setOpacity: (opacity) => ipcRenderer.send(ipc_channels_1.IpcChannels.SET_OPACITY, opacity),
     onPlaySound: (cb) => ipcRenderer.on("play-sound", (_, name) => cb(name)),
 });
