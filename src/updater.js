@@ -442,50 +442,42 @@ function initUpdater(ctx) {
         manualUpdateCheck = manual;
         updateStatus = "checking";
         ctx.rebuildAllMenus();
-        // Step 1: Check GitHub API for latest version
+        // Step 1: Check GitHub API for latest version (best-effort; falls through on failure)
         ctx.updateLog("Fetching latest version from GitHub API...");
-        let latestVersion;
+        let latestVersion = null;
         try {
             latestVersion = await fetchLatestVersion();
             ctx.updateLog(`Latest version on GitHub: ${latestVersion}`);
         }
         catch (err) {
-            ctx.updateLog(`ERROR: Failed to fetch latest version: ${err.message}`);
-            // Network error or GitHub API issue
-            updateStatus = "error";
-            manualUpdateCheck = false;
-            ctx.rebuildAllMenus();
-            if (manual) {
-                ctx.updateLog("Showing error dialog (GitHub API failed)");
-                electron_1.dialog.showMessageBox({
-                    type: "error",
-                    title: ctx.t("updateError"),
-                    message: ctx.t("updateErrorMsg"),
-                    noLink: true,
-                });
-            }
-            return;
+            // API rate limit (403), network error, etc. — don't show an error;
+            // fall through to electron-updater which reads latest-mac.yml directly
+            // (not subject to GitHub API rate limits).
+            ctx.updateLog(`WARN: GitHub API unavailable (${err.message}), falling through to electron-updater`);
         }
-        // Step 2: Compare versions
-        const versionCompare = compareVersions(currentVersion, latestVersion);
-        ctx.updateLog(`Version comparison: ${currentVersion} vs ${latestVersion} = ${versionCompare}`);
-        if (versionCompare >= 0) {
-            // Current version is up-to-date or newer
-            ctx.updateLog("Current version is up-to-date or newer");
-            updateStatus = "idle";
-            manualUpdateCheck = false;
-            ctx.rebuildAllMenus();
-            if (manual) {
-                ctx.updateLog("Showing 'up to date' notification");
-                new electron_1.Notification({
-                    title: ctx.t("updateNotAvailable"),
-                    body: ctx.t("updateNotAvailableMsg").replace("{version}", currentVersion),
-                }).show();
+        // Step 2: If we got a version and it's not newer, we're up to date
+        if (latestVersion !== null) {
+            const versionCompare = compareVersions(currentVersion, latestVersion);
+            ctx.updateLog(`Version comparison: ${currentVersion} vs ${latestVersion} = ${versionCompare}`);
+            if (versionCompare >= 0) {
+                // Current version is up-to-date or newer
+                ctx.updateLog("Current version is up-to-date or newer");
+                updateStatus = "idle";
+                manualUpdateCheck = false;
+                ctx.rebuildAllMenus();
+                if (manual) {
+                    ctx.updateLog("Showing 'up to date' notification");
+                    new electron_1.Notification({
+                        title: ctx.t("updateNotAvailable"),
+                        body: ctx.t("updateNotAvailableMsg").replace("{version}", currentVersion),
+                    }).show();
+                }
+                return;
             }
-            return;
+            ctx.updateLog(`Newer version available: ${latestVersion}, proceeding with electron-updater`);
         }
-        // Step 3: Newer version available, use electron-updater to download
-        ctx.updateLog(`Newer version available: ${latestVersion}, proceeding with electron-updater`);
+        // Step 3: Use electron-updater to check/download (works even if GitHub API was unavailable)
+        ctx.updateLog("Proceeding with electron-updater check");
         const au = getAutoUpdater();
         if (!au) {
             ctx.updateLog("ERROR: AutoUpdater not available");
