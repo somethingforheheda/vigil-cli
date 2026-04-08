@@ -17,4 +17,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     setCollapsed: (collapsed) => ipcRenderer.send(ipc_channels_1.IpcChannels.LIST_COLLAPSED, collapsed),
     setOpacity: (opacity) => ipcRenderer.send(ipc_channels_1.IpcChannels.SET_OPACITY, opacity),
     onPlaySound: (cb) => ipcRenderer.on("play-sound", (_, name) => cb(name)),
+    // ── Drag / snap / mode collapse ──
+    dragWindow: (dx, dy) => ipcRenderer.send("move-window", { dx, dy }),
+    snapToEdge: (x, y) => ipcRenderer.send("snap-to-edge", { x, y }),
+    onCollapseToOrb: (cb) => ipcRenderer.on(ipc_channels_1.IpcChannels.COLLAPSE_TO_ORB, () => cb()),
+    reportWindowSize: (width, height) => ipcRenderer.send(ipc_channels_1.IpcChannels.WINDOW_SIZE, { width, height }),
 });

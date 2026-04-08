@@ -129,7 +129,17 @@ var CORE_HOOKS = [
   "SubagentStop",
   "Notification",
   "Elicitation",
-  "WorktreeCreate"
+  "ElicitationResult",
+  "WorktreeCreate",
+  "WorktreeRemove",
+  "PermissionDenied",
+  "ConfigChange",
+  "InstructionsLoaded",
+  "CwdChanged",
+  "Setup",
+  "TeammateIdle",
+  "TaskCreated",
+  "TaskCompleted"
 ];
 var VERSIONED_HOOKS = [
   { event: "PreCompact", minVersion: "2.1.76" },

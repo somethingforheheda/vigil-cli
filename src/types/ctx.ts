@@ -118,7 +118,7 @@ export interface ServerContext {
   readonly pendingPermissions: PermissionEntry[];
   readonly passthroughTools: ReadonlySet<string>;
   readonly validStates: ReadonlySet<AgentState>;
-  readonly sessions: Map<string, SessionRecord>;
+  readonly sessions: ReadonlyMap<string, SessionRecord>;
 
   applySessionEvent(update: SessionEventUpdate): void;
   resolvePermissionEntry(entry: PermissionEntry, behavior: "allow" | "deny", message?: string): void;
@@ -138,7 +138,7 @@ export interface ServerContext {
 
 export interface MenuContext {
   readonly win: BrowserWindow | null;
-  readonly sessions: Map<string, SessionRecord>;
+  readonly sessions: ReadonlyMap<string, SessionRecord>;
   readonly dndEnabled: boolean;
   readonly pendingPermissions: PermissionEntry[];
 

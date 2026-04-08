@@ -1,360 +1,620 @@
 "use strict";
 
-// ── Agent display config ──
-const AGENT_ICONS = {
-  "claude-code":  "◆",
-  "codex":        "⚡",
-  "cursor-agent": "◈",
-  "copilot-cli":  "✦",
-  "gemini":       "✿",
-  "codebuddy":    "◉",
-};
+// ═══════════════════════════════════════════════════════
+// claude-island spring params → CSS cubic-bezier:
+//   expand : 0.42s cubic-bezier(0.34, 1.25, 0.64, 1)   ← spring(0.42, 0.8)
+//   collapse: 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94) ← spring(0.45, 1.0) no overshoot
+//   content : 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94) ← .smooth
+//   fast-out: 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94)
+// ═══════════════════════════════════════════════════════
 
-// State display: label, color, whether to show pulsing dot
-const STATE_CONFIG = {
-  working:      { label: "working",      color: "#5599ff", pulse: true  },
-  thinking:     { label: "thinking",     color: "#a07fff", pulse: true  },
-  juggling:     { label: "juggling",     color: "#5599ff", pulse: true  },
-  sweeping:     { label: "sweeping",     color: "#80ccff", pulse: true  },
-  carrying:     { label: "carrying",     color: "#80ccff", pulse: true  },
-  error:        { label: "error",        color: "#ff5555", pulse: false },
-  attention:    { label: "done",         color: "#55ee88", pulse: false },
-  notification: { label: "notify",       color: "#ffcc44", pulse: true  },
-  idle:         { label: "idle",         color: "#555577", pulse: false },
-  sleeping:     { label: "sleeping",     color: "#444460", pulse: false },
-};
+// ── Spinner (claude-island ProcessingSpinner: ·✢✳∗✻✽ @ 150ms) ──
+const SPIN = ["·", "✢", "✳", "∗", "✻", "✽"];
+let _spinIdx = 0, _spinTimer = null;
 
-let sessions = [];
-let prevSessionIds = null; // null = first render, skip animation
-let collapsed = false;
-
-// ── Elapsed time formatting ──
-function formatElapsed(ms) {
-  const sec = Math.floor(ms / 1000);
-  if (sec < 5)  return "just now";
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ${String(sec % 60).padStart(2, "0")}s`;
-  const hr = Math.floor(min / 60);
-  return `${hr}h ${String(min % 60).padStart(2, "0")}m`;
+function startSpinner() {
+  if (_spinTimer) return;
+  _spinTimer = setInterval(() => {
+    _spinIdx = (_spinIdx + 1) % SPIN.length;
+    const f = SPIN[_spinIdx];
+    for (const el of document.querySelectorAll(".spin")) el.textContent = f;
+  }, 150);
+}
+function stopSpinner() {
+  if (_spinTimer) { clearInterval(_spinTimer); _spinTimer = null; }
 }
 
-// ── Shorten home directory to ~ ──
-function shortenPath(p) {
+// ── State ──
+let sessions = [];
+let prevIds = null;     // Set of sessionIds from last render (null = first time)
+let idsChanged = false; // flag so we only animate new rows on fresh updates
+
+// ── Mode machine ──
+let currentMode = "orb";
+let peekTimer = null;   // 8s auto-return peek→orb
+document.body.dataset.mode = "orb";
+
+// ── Drag ──
+let dragging = false, dragX = 0, dragY = 0;
+
+// ═══════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════
+function fmt(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 5)  return "just now";
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+}
+function shorten(p) {
   if (!p) return "";
-  // macOS / Linux
-  const unixHome = p.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
-  if (unixHome) return "~" + p.slice(unixHome[0].length);
-  // Windows
-  const winHome = p.match(/^[A-Za-z]:\\Users\\[^\\]+/);
-  if (winHome) return "~" + p.slice(winHome[0].length).replace(/\\/g, "/");
+  const u = p.match(/^(\/Users\/[^/]+|\/home\/[^/]+)/);
+  if (u) return "~" + p.slice(u[0].length);
+  const w = p.match(/^[A-Za-z]:\\Users\\[^\\]+/);
+  if (w) return "~" + p.slice(w[0].length).replace(/\\/g, "/");
   return p;
 }
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+const PRIO = { error:8, notification:7, sweeping:6, attention:5, carrying:4, juggling:4, working:3, thinking:2, idle:1, sleeping:0 };
 
-// ── Report card screen positions to main process ──
+// ═══════════════════════════════════════════════════════
+// Size reporting
+// ═══════════════════════════════════════════════════════
 function reportCardPositions() {
-  const positions = {};
-  for (const card of document.querySelectorAll("#list .card:not(.card-exit)")) {
-    const rect = card.getBoundingClientRect();
-    positions[card.dataset.sessionId] = {
-      top: Math.round(rect.top),
-      bottom: Math.round(rect.bottom),
-      centerY: Math.round((rect.top + rect.bottom) / 2),
-    };
+  const pos = {};
+  for (const row of document.querySelectorAll(".srow")) {
+    const r = row.getBoundingClientRect();
+    pos[row.dataset.sid] = { top: Math.round(r.top), bottom: Math.round(r.bottom), centerY: Math.round((r.top+r.bottom)/2) };
   }
-  window.electronAPI.reportCardPositions(positions);
+  window.electronAPI.reportCardPositions(pos);
 }
 
-// ── Report desired window height to main process (max 5 cards) ──
-const MAX_VISIBLE_CARDS = 5;
-function reportWindowHeight() {
-  const headerEl      = document.querySelector(".header");
-  const opacityPanelEl = document.getElementById("opacity-panel");
-  const listEl        = document.getElementById("list");
-  if (!headerEl || !listEl) return;
-
-  const opacityPanelH = (opacityPanelEl && opacityPanelEl.classList.contains("visible"))
-    ? opacityPanelEl.offsetHeight + 1  // +1 for border-bottom
-    : 0;
-
-  // Collapsed: only header (+ opacity panel if open)
-  if (collapsed) {
-    window.electronAPI.reportListHeight(headerEl.offsetHeight + 2 + opacityPanelH);
-    return;
-  }
-
-  const cards = [...listEl.querySelectorAll(".card:not(.card-exit)")];
-  const headerH = headerEl.offsetHeight + 1; // +1 for border-bottom
-
-  if (cards.length === 0) {
-    // No sessions: collapse to header strip only
-    window.electronAPI.reportListHeight(headerEl.offsetHeight + 2 + opacityPanelH); // +2 for .app top/bottom border
-    return;
-  }
-
-  const GAP      = 5;  // gap: 5px on .list
-  const LIST_PAD = 16; // padding: 8px top + 8px bottom on .list
-  const visible  = cards.slice(0, MAX_VISIBLE_CARDS);
-  const cardsH   = visible.reduce((sum, c) => sum + c.offsetHeight, 0)
-                   + GAP * (visible.length - 1);
-  window.electronAPI.reportListHeight(headerH + opacityPanelH + LIST_PAD + cardsH);
+function panelHeight() {
+  const bar  = document.getElementById("cap-bar");
+  const list = document.getElementById("slist");
+  const dnd  = document.getElementById("dnd-bar");
+  if (!bar) return 40;
+  return bar.offsetHeight
+    + (list ? list.scrollHeight : 0)
+    + (dnd && dnd.classList.contains("on") ? dnd.offsetHeight : 0)
+    + 2; // border
 }
 
-// ── Render all session cards ──
-function render() {
-  const listEl  = document.getElementById("list");
-  const countEl = document.getElementById("count");
+// ═══════════════════════════════════════════════════════
+// Mode transitions (claude-island spring animations)
+// ═══════════════════════════════════════════════════════
+function setMode(mode) {
+  if (currentMode === mode) return;
+  const prev = currentMode;
+  currentMode = mode;
 
-  const visible = sessions.filter(s => !s.headless);
+  const capEl  = document.getElementById("cap");
+  const bodyEl = document.getElementById("cap-body");
 
-  if (visible.length === 0) {
-    countEl.textContent = "";
-    countEl.className = "count";
-    listEl.innerHTML = "";
-    prevSessionIds = new Set();
-    requestAnimationFrame(() => reportWindowHeight());
-    return;
-  }
+  if (mode === "orb") {
+    clearTimeout(peekTimer); peekTimer = null;
+    stopSpinner();
 
-  countEl.textContent = `${visible.length} active`;
-  countEl.className = "count has-active";
-
-  // Sort: highest priority state first, then most recent
-  const PRIORITY = { error: 8, notification: 7, sweeping: 6, attention: 5, carrying: 4, juggling: 4, working: 3, thinking: 2, idle: 1, sleeping: 0 };
-  const sorted = [...visible].sort((a, b) => {
-    const pa = PRIORITY[a.state] || 0;
-    const pb = PRIORITY[b.state] || 0;
-    if (pb !== pa) return pb - pa;
-    return b.updatedAt - a.updatedAt;
-  });
-
-  const now = Date.now();
-
-  // Diff: only update cards that changed to avoid DOM thrashing
-  const currentIds = new Set(sorted.map(s => s.sessionId));
-  const existing = [...listEl.querySelectorAll(".card:not(.card-exit)")];
-  const newCards = sorted.map((s, i) => {
-    const cfg  = STATE_CONFIG[s.state] || STATE_CONFIG.idle;
-    const icon = AGENT_ICONS[s.agentId] || "◆";
-    const cwd  = shortenPath(s.cwd);
-    const name = s.agentId || "unknown";
-    const elapsed = formatElapsed(now - s.updatedAt);
-
-    // Reuse existing card element if it's the same session
-    let card = (existing[i] && existing[i].dataset.sessionId === s.sessionId)
-      ? existing[i]
-      : null;
-
-    if (!card) {
-      card = document.createElement("div");
-      card.className = "card";
-      card.dataset.sessionId = s.sessionId;
-      card.addEventListener("click", () => {
-        window.electronAPI.focusSession(s.sessionId);
+    if (prev === "panel") {
+      // Panel → ORB: content fades out fast, then capsule collapses
+      _collapseBody(bodyEl, () => {
+        if (capEl) capEl.classList.remove("panel");
+        document.body.dataset.mode = "orb";
+        window.electronAPI.reportWindowSize(52, 52);
       });
+    } else {
+      // Peek → ORB
+      document.body.dataset.mode = "orb";
+      window.electronAPI.reportWindowSize(52, 52);
     }
 
-    // Always update state-related classes
-    card.className = ["card", `state-${s.state}`].join(" ");
+  } else if (mode === "peek") {
+    clearTimeout(peekTimer); peekTimer = null;
 
-    // Slide-in animation for newly appeared sessions
-    if (prevSessionIds !== null && !prevSessionIds.has(s.sessionId)) {
-      card.classList.add("card-enter");
-      card.addEventListener("animationend", () => card.classList.remove("card-enter"), { once: true });
+    if (prev === "panel") {
+      // Panel → Peek: collapse body first, then narrow capsule
+      _collapseBody(bodyEl, () => {
+        if (capEl) capEl.classList.remove("panel");
+        document.body.dataset.mode = "peek";
+        if (userWidth) capEl.style.width = userWidth + "px";
+        window.electronAPI.reportWindowSize(capWidth(), 40);
+        updateCapsule();
+        startSpinner();
+        resetPeekTimer();
+      });
+    } else {
+      // ORB → Peek
+      document.body.dataset.mode = "peek";
+      if (userWidth) capEl.style.width = userWidth + "px";
+      updateCapsule();
+      startSpinner();
+      window.electronAPI.reportWindowSize(capWidth(), 40);
+      resetPeekTimer();
     }
 
-    const safeTitle = s.title ? s.title.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") : "";
-    const hasCwd = !!cwd;
+  } else { // panel
+    clearTimeout(peekTimer); peekTimer = null;
 
-    card.innerHTML = `
-      <div class="card-top">
-        <span class="agent-icon">${icon}</span>
-        <span class="agent-name">${name}</span>
-        <span class="state-badge" style="color:${cfg.color}">
-          <span class="dot${cfg.pulse ? " pulse" : ""}" style="background:${cfg.color}"></span>
-          ${cfg.label}
-        </span>
-      </div>
-      ${safeTitle ? `<div class="card-title">${safeTitle}</div>` : ""}
-      ${hasCwd ? `<div class="card-cwd${safeTitle ? " card-cwd-sub" : ""}" title="${s.cwd || ""}">${cwd}</div>` : ""}
-      ${s.subagentCount > 0 ? `<div class="card-subagents">└─ ⚡ subagent${s.subagentCount > 1 ? ` ×${s.subagentCount}` : ""}</div>` : ""}
-      <div class="card-foot">
-        <span class="elapsed">${elapsed}</span>
-        ${s.host ? `<span class="host-badge">⬡ ${s.host}</span>` : ""}
-      </div>`;
+    // Peek → Panel: widen capsule + grow body downward
+    document.body.dataset.mode = "panel";
+    if (capEl) capEl.classList.add("panel");
+    if (userWidth) capEl.style.width = userWidth + "px";
+    startSpinner();
 
-    return card;
-  });
+    // Render content first (invisible, height 0)
+    renderRows();
+    updateCapsule();
 
-  // FLIP step 1: snapshot current positions before DOM update
-  const prevPositions = new Map();
-  for (const card of existing) {
-    prevPositions.set(card.dataset.sessionId, card.getBoundingClientRect().top);
-  }
-
-  // Exit animation for sessions that just disappeared
-  const newlyExiting = [];
-  if (prevSessionIds !== null) {
-    for (const card of existing) {
-      const id = card.dataset.sessionId;
-      if (prevSessionIds.has(id) && !currentIds.has(id)) {
-        card.classList.add("card-exit");
-        card.addEventListener("animationend", () => card.remove(), { once: true });
-        newlyExiting.push(card);
-      }
-    }
-  }
-  // Preserve cards already mid-exit-animation from previous renders
-  const alreadyExiting = [...listEl.querySelectorAll(".card-exit")].filter(c => !newlyExiting.includes(c));
-
-  // Replace list contents, keeping exit-animating cards in DOM
-  listEl.replaceChildren(...newCards, ...alreadyExiting, ...newlyExiting);
-  prevSessionIds = currentIds;
-
-  // FLIP step 2: animate cards that moved to a new position
-  for (const card of newCards) {
-    if (card.classList.contains("card-enter")) continue; // new card already has slide-in
-    const oldTop = prevPositions.get(card.dataset.sessionId);
-    if (oldTop === undefined) continue;
-    const delta = oldTop - card.getBoundingClientRect().top;
-    if (Math.abs(delta) < 1) continue; // didn't move
-    // Invert: jump back to old position instantly
-    card.style.transform = `translateY(${delta}px)`;
-    card.style.transition = "none";
-    // Play: next frame, animate to new position
+    // Then animate open (nextTick so CSS transition picks up)
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      card.style.transition = "transform 0.28s ease";
-      card.style.transform = "";
-      card.addEventListener("transitionend", () => {
-        card.style.transform = "";
-        card.style.transition = "";
-      }, { once: true });
+      _expandBody(bodyEl, () => {
+        reportCardPositions();
+        window.electronAPI.reportWindowSize(capWidth(), panelHeight());
+      });
     }));
   }
-
-  // Report card positions and window height to main process
-  requestAnimationFrame(() => { reportCardPositions(); reportWindowHeight(); });
 }
 
-// ── 1s interval: refresh elapsed times without waiting for new sessions-update ──
-setInterval(render, 1000);
+// Expand body downward — claude-island spring(0.42, 0.8)
+function _expandBody(bodyEl, onDone) {
+  if (!bodyEl) { if (onDone) onDone(); return; }
+  const target = bodyEl.scrollHeight || 200;
+  bodyEl.style.transition = "max-height .42s cubic-bezier(.34,1.25,.64,1)";
+  bodyEl.style.maxHeight = target + "px";
 
-// ── Receive sessions from main process ──
-window.electronAPI.onSessionsUpdate((newSessions) => {
-  sessions = newSessions;
-  render();
-});
-
-// ── DND state ──
-window.electronAPI.onDndChange((enabled) => {
-  const bar = document.getElementById("dnd-bar");
-  if (enabled) {
-    bar.classList.add("visible");
-  } else {
-    bar.classList.remove("visible");
+  // Content fade-in: scale(.85→1) + opacity(0→1) after body starts opening
+  // claude-island: .scale(0.8, anchor:.top).combined(.opacity) .smooth(0.35)
+  const slist = document.getElementById("slist");
+  if (slist) {
+    slist.style.opacity = "0";
+    slist.style.transform = "scaleY(0.88)";
+    slist.style.transformOrigin = "top";
+    slist.style.transition = "none";
+    setTimeout(() => {
+      slist.style.transition = "opacity .35s cubic-bezier(.25,.46,.45,.94), transform .35s cubic-bezier(.25,.46,.45,.94)";
+      slist.style.opacity = "1";
+      slist.style.transform = "scaleY(1)";
+    }, 60); // slight delay so body starts opening first
   }
-});
 
-// ── Menu button ──
-document.getElementById("menu-btn").addEventListener("click", () => {
-  window.electronAPI.showContextMenu();
-});
+  bodyEl.addEventListener("transitionend", function handler() {
+    bodyEl.removeEventListener("transitionend", handler);
+    bodyEl.style.maxHeight = "none";
+    if (onDone) onDone();
+  }, { once: true });
+}
 
-// ── Collapse button ──
-document.getElementById("collapse-btn").addEventListener("click", () => {
-  collapsed = !collapsed;
-  const appEl = document.querySelector(".app");
-  const collapseBtn = document.getElementById("collapse-btn");
-  const opacityPanel = document.getElementById("opacity-panel");
-  if (collapsed) {
-    appEl.classList.add("collapsed");
-    collapseBtn.textContent = "▴";
-    collapseBtn.title = "Expand";
-    opacityPanel.classList.remove("visible");
-  } else {
-    appEl.classList.remove("collapsed");
-    collapseBtn.textContent = "▾";
-    collapseBtn.title = "Collapse";
+// Collapse body — claude-island spring(0.45, 1.0) no overshoot
+function _collapseBody(bodyEl, onDone) {
+  if (!bodyEl || bodyEl.scrollHeight === 0) { if (onDone) onDone(); return; }
+
+  // Content fades out fast first (0.15s) — claude-island removal transition
+  const slist = document.getElementById("slist");
+  if (slist) {
+    slist.style.transition = "opacity .15s cubic-bezier(.25,.46,.45,.94)";
+    slist.style.opacity = "0";
   }
-  requestAnimationFrame(() => reportWindowHeight());
-  window.electronAPI.setCollapsed(collapsed);
-});
 
-// ── Opacity button ──
-document.getElementById("opacity-btn").addEventListener("click", () => {
-  const opacityPanel = document.getElementById("opacity-panel");
-  opacityPanel.classList.toggle("visible");
-  requestAnimationFrame(() => reportWindowHeight());
-});
+  setTimeout(() => {
+    // Then collapse height
+    const cur = bodyEl.scrollHeight;
+    bodyEl.style.maxHeight = cur + "px";
+    bodyEl.style.transition = "none";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      bodyEl.style.transition = "max-height .45s cubic-bezier(.25,.46,.45,.94)";
+      bodyEl.style.maxHeight = "0";
+      bodyEl.addEventListener("transitionend", function h() {
+        bodyEl.removeEventListener("transitionend", h);
+        // Reset slist styles
+        if (slist) { slist.style.opacity = ""; slist.style.transform = ""; slist.style.transition = ""; }
+        if (onDone) onDone();
+      }, { once: true });
+    }));
+  }, 120);
+}
 
-document.getElementById("opacity-slider").addEventListener("input", (e) => {
-  const val = parseFloat(e.target.value);
-  document.getElementById("opacity-value").textContent = Math.round(val * 100) + "%";
-  window.electronAPI.setOpacity(val);
-});
+function resetPeekTimer() {
+  clearTimeout(peekTimer);
+  const vis = sessions.filter(s => !s.headless);
+  if (vis.every(s => s.state === "idle" || s.state === "sleeping")) {
+    peekTimer = setTimeout(() => { peekTimer = null; setMode("orb"); }, 8000);
+  }
+}
 
-// ── Theme & font size ──
-const FONT_SCALE_MAP = { small: 0.85, medium: 1.0, large: 1.2 };
-window.electronAPI.onApplyPrefs(({ theme, fontSize, collapsed: initCollapsed, windowOpacity: initOpacity }) => {
-  if (theme)    document.documentElement.setAttribute("data-theme", theme);
-  if (fontSize) document.documentElement.style.setProperty("--font-scale", FONT_SCALE_MAP[fontSize] ?? 1.0);
-  if (typeof initCollapsed === "boolean" && initCollapsed !== collapsed) {
-    collapsed = initCollapsed;
-    const appEl = document.querySelector(".app");
-    const collapseBtn = document.getElementById("collapse-btn");
-    if (collapsed) {
-      appEl.classList.add("collapsed");
-      collapseBtn.textContent = "▴";
-      collapseBtn.title = "Expand";
-    } else {
-      appEl.classList.remove("collapsed");
-      collapseBtn.textContent = "▾";
-      collapseBtn.title = "Collapse";
+// ═══════════════════════════════════════════════════════
+// ORB dots update
+// ═══════════════════════════════════════════════════════
+function updateOrb() {
+  const orb  = document.getElementById("orb");
+  const dots = document.getElementById("orb-dots");
+  if (!orb || !dots) return;
+  const vis = sessions.filter(s => !s.headless);
+  const hasErr  = vis.some(s => s.state === "error");
+  const hasPerm = vis.some(s => s.state === "notification");
+  const hasAct  = vis.some(s => ["working","thinking","juggling"].includes(s.state));
+  orb.className = "orb" + (hasErr ? " s-err" : hasPerm ? " s-perm" : hasAct ? " s-active" : "");
+  dots.innerHTML = vis.slice(0, 5).map(s => {
+    const c = s.state === "error" ? " err" : s.state === "notification" ? " perm"
+      : ["working","thinking","juggling"].includes(s.state) ? " active" : "";
+    return `<span class="orb-dot${c}"></span>`;
+  }).join("") + (vis.length > 5 ? `<span style="font-size:8px;color:#555">+${vis.length - 5}</span>` : "");
+}
+
+// ═══════════════════════════════════════════════════════
+// Capsule bar update (PEEK / PANEL top indicator)
+// ═══════════════════════════════════════════════════════
+function updateCapsule() {
+  const indEl   = document.getElementById("cap-ind");
+  const agentEl = document.getElementById("cap-agent");
+  const lineEl  = document.getElementById("cap-line");
+  const toolEl  = document.getElementById("cap-tool");
+  const statEl  = document.getElementById("cap-status");
+  if (!indEl) return;
+
+  const vis = sessions.filter(s => !s.headless);
+
+  // ── PANEL mode: minimal header — just session state dots on the right ──
+  if (currentMode === "panel") {
+    indEl.innerHTML = "";
+    agentEl.style.cssText = "color:var(--t25)";
+    agentEl.textContent = "VigilCLI";
+    lineEl.className = "";
+    statEl.textContent = "";
+    statEl.removeAttribute("style");
+
+    // Dots: one per session, colored by state (max 8, then +N)
+    const dotColor = s => {
+      if (["working","thinking","juggling"].includes(s.state)) return "var(--orange)";
+      if (s.state === "notification") return "var(--amber)";
+      if (s.state === "error")        return "var(--red)";
+      if (s.state === "attention")    return "var(--green)";
+      return "rgba(255,255,255,0.18)";
+    };
+    const shown = vis.slice(0, 8);
+    const extra = vis.length > 8 ? `<span style="font-size:9px;color:var(--t25);margin-left:1px">+${vis.length - 8}</span>` : "";
+    toolEl.style.cssText = "display:flex;align-items:center;gap:5px;max-width:none;font-family:inherit";
+    toolEl.innerHTML = shown.map(s =>
+      `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor(s)};flex-shrink:0"></span>`
+    ).join("") + extra;
+    return;
+  }
+
+  // ── PEEK mode: show most active session info ──
+  agentEl.removeAttribute("style");
+  toolEl.style.cssText = "";
+
+  if (!vis.length) {
+    indEl.innerHTML = `<span class="ind-dot"></span>`;
+    agentEl.textContent = "VigilCLI";
+    lineEl.className = "";
+    toolEl.textContent = "";
+    statEl.textContent = "";
+    statEl.removeAttribute("style");
+    return;
+  }
+
+  const top = [...vis].sort((a,b) => (PRIO[b.state]||0) - (PRIO[a.state]||0))[0];
+  const isActive = ["working","thinking","juggling"].includes(top.state);
+  const isPerm   = top.state === "notification";
+  const isErr    = top.state === "error";
+  const isDone   = top.state === "attention";
+
+  if (isActive) {
+    indEl.innerHTML = `<span class="spin" style="color:var(--orange)">${SPIN[_spinIdx]}</span>`;
+  } else if (isPerm) {
+    indEl.innerHTML = `<span class="ind-dot a"></span>`;
+  } else if (isErr) {
+    indEl.innerHTML = `<span class="ind-dot r"></span>`;
+  } else if (isDone) {
+    indEl.innerHTML = `<span class="ind-dot g"></span>`;
+  } else {
+    indEl.innerHTML = `<span class="ind-dot"></span>`;
+  }
+
+  agentEl.textContent = top.agentId || "claude";
+  if (top.title) {
+    agentEl.innerHTML = `${esc(top.agentId || "claude")} <span style="color:var(--t50);font-weight:400">${esc(top.title)}</span>`;
+  }
+  lineEl.className = isActive ? "running" : "";
+  toolEl.textContent = (isActive && top.currentTool) ? top.currentTool : "";
+
+  if (isPerm) {
+    statEl.textContent = "permission";
+    statEl.style.cssText = "color:var(--amber);background:rgba(255,178,0,.1)";
+  } else if (isErr) {
+    statEl.textContent = "error";
+    statEl.style.cssText = "color:var(--red);background:rgba(255,77,77,.1)";
+  } else if (isActive) {
+    statEl.textContent = top.state;
+    statEl.style.cssText = "color:var(--orange);background:rgba(217,120,87,.1)";
+  } else {
+    statEl.textContent = "";
+    statEl.removeAttribute("style");
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Session rows (claude-island InstanceRow)
+// ═══════════════════════════════════════════════════════
+function buildRow(s) {
+  const active = ["working","thinking","juggling"].includes(s.state);
+  const perm   = s.state === "notification";
+  const err    = s.state === "error";
+  const done   = s.state === "attention";
+  const ms     = Date.now() - s.updatedAt;
+  const min    = ms / 60000;
+  const tCls   = min > 15 ? "tr" : min > 5 ? "ta" : "";
+
+  // State indicator
+  let ind;
+  if (active) {
+    ind = `<span class="spin" style="color:var(--orange)">${SPIN[_spinIdx]}</span>`;
+  } else if (perm) {
+    ind = `<span class="ind-dot a"></span>`;
+  } else if (err) {
+    ind = `<span class="ind-dot r"></span>`;
+  } else if (done) {
+    ind = `<span class="ind-dot g"></span>`;
+  } else {
+    ind = `<span class="ind-dot"></span>`;
+  }
+
+  // Subtitle: tool call or cwd
+  let sub = "";
+  if (active && s.currentTool) {
+    sub = `<span class="stool">${esc(s.currentTool)}</span>`;
+    if (s.currentToolInput) {
+      const inp = s.currentToolInput;
+      const hint = typeof inp === "object"
+        ? (inp.command || inp.file_path || inp.query || inp.pattern || "")
+        : String(inp);
+      if (hint) sub += ` <span style="color:var(--t40)">${esc(String(hint).slice(0, 52))}</span>`;
     }
-    requestAnimationFrame(() => reportWindowHeight());
+  } else if (s.cwd) {
+    sub = `<span style="color:var(--t40)">${esc(shorten(s.cwd))}</span>`;
   }
-  if (typeof initOpacity === "number") {
-    const slider = document.getElementById("opacity-slider");
-    const valEl  = document.getElementById("opacity-value");
-    slider.value = String(initOpacity);
-    valEl.textContent = Math.round(initOpacity * 100) + "%";
+
+  // Subagent row (separate line, like old card-subagents)
+  const subagentRow = s.subagentCount > 0
+    ? `<div class="ssub" style="color:var(--orange);opacity:.75">└─ ⚡ subagent${s.subagentCount > 1 ? ` ×${s.subagentCount}` : ""}</div>`
+    : "";
+
+  // Status pill (same as cap-bar shows for top session)
+  let pill = "";
+  if (perm) {
+    pill = `<span class="spill" style="color:var(--amber);background:rgba(255,178,0,.1)">permission</span>`;
+  } else if (err) {
+    pill = `<span class="spill" style="color:var(--red);background:rgba(255,77,77,.1)">error</span>`;
+  } else if (active) {
+    pill = `<span class="spill" style="color:var(--orange);background:rgba(217,120,87,.1)">${s.state}</span>`;
+  } else if (done) {
+    pill = `<span class="spill" style="color:var(--green);background:rgba(102,191,115,.1)">done</span>`;
+  } else {
+    pill = `<span class="spill" style="color:var(--t25);background:rgba(255,255,255,.05)">${s.state}</span>`;
   }
+
+  return `<div class="srow" data-sid="${esc(s.sessionId)}">
+  <div class="sind">${ind}</div>
+  <div class="sbody">
+    <div class="stitle">${esc(s.agentId || "claude")}${s.title ? ` <span style="color:var(--t50);font-weight:400">${esc(s.title)}</span>` : ""}</div>
+    ${sub ? `<div class="ssub">${sub}</div>` : ""}
+    ${subagentRow}
+  </div>
+  <div class="sright">${pill}<span class="stime ${tCls}">${fmt(ms)}</span></div>
+</div>`;
+}
+
+function renderRows() {
+  if (currentMode !== "panel") return;
+  const listEl = document.getElementById("slist");
+  if (!listEl) return;
+
+  const vis = sessions.filter(s => !s.headless);
+  const sorted = [...vis].sort((a,b) => (PRIO[b.state]||0) - (PRIO[a.state]||0));
+  const curIds = new Set(sorted.map(s => s.sessionId));
+
+  // Capture old IDs before re-render
+  const wasIds = prevIds;
+  prevIds = curIds;
+
+  listEl.innerHTML = sorted.map(buildRow).join("");
+
+  // Click handlers + stagger entry animation (claude-island: 0/50/100/150ms)
+  let delay = 0;
+  for (const row of listEl.querySelectorAll(".srow")) {
+    const sid = row.dataset.sid;
+    // Animate new rows only
+    if (idsChanged && wasIds !== null && !wasIds.has(sid)) {
+      row.style.animationDelay = `${delay}ms`;
+      row.classList.add("srow-new");
+      row.addEventListener("animationend", () => row.classList.remove("srow-new"), { once: true });
+      delay += 50; // claude-island stagger: 50ms
+    }
+    row.addEventListener("click", () => window.electronAPI.focusSession(sid));
+  }
+  idsChanged = false;
+
+  if (currentMode === "panel") {
+    requestAnimationFrame(() => reportCardPositions());
+  }
+}
+
+// ── 1s tick: refresh elapsed ──
+setInterval(() => {
+  if (currentMode === "panel") renderRows();
+  else if (currentMode === "peek") updateCapsule();
+}, 1000);
+
+// ═══════════════════════════════════════════════════════
+// IPC events
+// ═══════════════════════════════════════════════════════
+window.electronAPI.onSessionsUpdate((s) => {
+  sessions = s;
+  idsChanged = true;
+  const vis = sessions.filter(x => !x.headless);
+
+  if (!vis.length) {
+    if (currentMode !== "orb") setMode("orb");
+    return;
+  }
+
+  if (currentMode === "orb") {
+    setMode("peek");
+  } else if (currentMode === "peek") {
+    updateCapsule();
+    resetPeekTimer();
+  } else {
+    renderRows();
+    updateCapsule();
+    // Resize if height changed
+    requestAnimationFrame(() => window.electronAPI.reportListHeight(panelHeight()));
+  }
+
+  updateOrb();
 });
 
-// ── Sound synthesis (Web Audio API — no files needed) ──
-let _audioCtx = null;
-function getAudioCtx() {
-  if (!_audioCtx) _audioCtx = new AudioContext();
-  return _audioCtx;
-}
+window.electronAPI.onCollapseToOrb(() => {
+  if (currentMode !== "orb") setMode("orb");
+});
+
+window.electronAPI.onDndChange((on) => {
+  const el = document.getElementById("dnd-bar");
+  if (on) el.classList.add("on"); else el.classList.remove("on");
+  if (currentMode === "panel") requestAnimationFrame(() => window.electronAPI.reportListHeight(panelHeight()));
+});
+
+// Capsule bar click: peek ↔ panel
+document.getElementById("cap-bar").addEventListener("click", (e) => {
+  if (dragging) return;
+  if (currentMode === "peek")  setMode("panel");
+  else if (currentMode === "panel") setMode("peek");
+});
+
+// Apply prefs (theme/fontSize)
+const FSCALE = { small: 0.85, medium: 1.0, large: 1.2 };
+window.electronAPI.onApplyPrefs(({ fontSize }) => {
+  if (fontSize) document.documentElement.style.setProperty("--font-scale", FSCALE[fontSize] ?? 1.0);
+});
+
+// ── Sound (Web Audio) ──
+let _actx = null;
 window.electronAPI.onPlaySound((name) => {
   try {
-    const actx = getAudioCtx();
-    actx.resume().then(() => {
-      function tone(freq, start, duration, peakGain) {
-        const osc = actx.createOscillator();
-        const env = actx.createGain();
-        osc.connect(env); env.connect(actx.destination);
-        osc.type = "sine";
-        osc.frequency.value = freq;
-        env.gain.setValueAtTime(0, start);
-        env.gain.linearRampToValueAtTime(peakGain, start + 0.008);
-        env.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-        osc.start(start); osc.stop(start + duration + 0.02);
+    if (!_actx) _actx = new AudioContext();
+    _actx.resume().then(() => {
+      const t = _actx.currentTime;
+      function tone(f, s, d, g) {
+        const o = _actx.createOscillator(), e = _actx.createGain();
+        o.connect(e); e.connect(_actx.destination);
+        o.type = "sine"; o.frequency.value = f;
+        e.gain.setValueAtTime(0, s);
+        e.gain.linearRampToValueAtTime(g, s+.008);
+        e.gain.exponentialRampToValueAtTime(.0001, s+d);
+        o.start(s); o.stop(s+d+.02);
       }
-      const t = actx.currentTime;
       if (name === "complete") {
-        // Ascending triad: C5 → E5 → G5
-        tone(523, t + 0.00, 0.45, 0.18);
-        tone(659, t + 0.10, 0.45, 0.18);
-        tone(784, t + 0.20, 0.55, 0.20);
+        tone(523, t+.00, .45, .18); tone(659, t+.10, .45, .18); tone(784, t+.20, .55, .20);
       } else {
-        // Single soft ping: A5
-        tone(880, t + 0.00, 0.35, 0.13);
+        tone(880, t, .35, .13);
       }
     });
-  } catch { /* audio context may not be available */ }
+  } catch {}
 });
 
-// ── Initial render (empty state) ──
-render();
+// ═══════════════════════════════════════════════════════
+// Drag (manual — no webkit-app-region)
+// ═══════════════════════════════════════════════════════
+function onDragStart(e) {
+  if (e.button !== 0) return;
+  dragging = false; dragX = e.screenX; dragY = e.screenY;
+}
+document.getElementById("orb-container").addEventListener("mousedown", onDragStart);
+document.getElementById("cap-bar").addEventListener("mousedown", (e) => {
+  // In panel mode the bar has webkit-app-region:drag, native drag takes over.
+  // In peek mode we do manual drag.
+  if (currentMode !== "peek") return;
+  onDragStart(e);
+});
+document.addEventListener("mousemove", (e) => {
+  if (!dragX && !dragY) return;
+  const dx = e.screenX - dragX, dy = e.screenY - dragY;
+  if (dx || dy) {
+    dragging = true; dragX = e.screenX; dragY = e.screenY;
+    window.electronAPI.dragWindow(dx, dy);
+  }
+});
+document.addEventListener("mouseup", () => {
+  const was = dragging;
+  dragging = false; dragX = 0; dragY = 0;
+  if (was) window.electronAPI.snapToEdge(window.screenX, window.screenY);
+});
+
+// ── ORB click → peek ──
+document.getElementById("orb-container").addEventListener("click", () => {
+  if (!dragging) setMode("peek");
+});
+
+// ═══════════════════════════════════════════════════════
+// Resize capsule width by dragging right edge
+// ═══════════════════════════════════════════════════════
+let userWidth = null;       // user-set override (null = use default 300/340)
+let isResizing = false;
+const CAP_MIN_W = 220, CAP_MAX_W = 520, RESIZE_ZONE = 8;
+
+function capWidth()   { return userWidth || (currentMode === "panel" ? 340 : 300); }
+function capHeight()  { return currentMode === "panel" ? panelHeight() : 40; }
+
+const capEl = document.getElementById("cap");
+
+// Change cursor when hovering near right edge
+capEl.addEventListener("mousemove", (e) => {
+  if (isResizing || dragging) return;
+  const rect = capEl.getBoundingClientRect();
+  capEl.style.cursor = e.clientX >= rect.right - RESIZE_ZONE ? "ew-resize" : "";
+});
+capEl.addEventListener("mouseleave", () => {
+  if (!isResizing) capEl.style.cursor = "";
+});
+
+// Start resize on mousedown near right edge
+capEl.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  const rect = capEl.getBoundingClientRect();
+  if (e.clientX < rect.right - RESIZE_ZONE) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  isResizing = true;
+
+  const startX = e.clientX;
+  const startW = rect.width;
+
+  // Suspend width transition so resize feels instant / snappy
+  capEl.style.transition = "border-radius .35s cubic-bezier(.34,1.25,.64,1)";
+
+  function onMove(ev) {
+    const newW = Math.max(CAP_MIN_W, Math.min(CAP_MAX_W, startW + (ev.clientX - startX)));
+    userWidth = newW;
+    capEl.style.width = newW + "px";
+    window.electronAPI.reportWindowSize(newW, capHeight());
+  }
+
+  function onUp() {
+    isResizing = false;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    capEl.style.transition = "";  // restore CSS transition
+    capEl.style.cursor = "";
+  }
+
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+});
+
+// ── Initial: tell main to resize to ORB ──
+window.electronAPI.reportWindowSize(52, 52);

@@ -135,11 +135,22 @@ body.side-right { padding-right: 10px; }  /* arrow sticks out right */
   box-shadow: var(--card-shadow);
   color: var(--text-primary);
   opacity: 0;
-  transition: opacity 0.25s ease;
+  transform: translateX(40px) scale(0.92);
+  will-change: transform, opacity;
 }
 
-.card.visible { opacity: 1; }
-.card.hiding  { opacity: 0; }
+@keyframes bubbleEnter {
+  from { opacity: 0; transform: translateX(40px) scale(0.92); }
+  to   { opacity: 1; transform: translateX(0)    scale(1);    }
+}
+
+@keyframes bubbleExit {
+  from { opacity: 1; transform: translateX(0);    }
+  to   { opacity: 0; transform: translateX(30px); }
+}
+
+.card.visible { animation: bubbleEnter 0.28s cubic-bezier(0.34, 1.25, 0.64, 1) forwards; }
+.card.hiding  { animation: bubbleExit  0.20s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards; }
 
 /* ── Chat tail / arrow ── */
 /* side-left: tail on left edge, pointing LEFT toward window */
@@ -272,10 +283,29 @@ html[data-theme="ocean"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8
   overflow-y: auto;
   word-break: break-all;
 }
+.command-block.scrollable-lg { max-height: 200px; }
 .command-block::-webkit-scrollbar { width: 4px; }
 .command-block::-webkit-scrollbar-track { background: transparent; }
 .command-block::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 2px; }
 .command-block::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+
+/* ── Diff rendering ── */
+.diff-file-path {
+  font-size: 11px;
+  color: var(--cmd-color);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+.diff-line {
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 0 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.diff-remove { background: #3d1a1a; color: #ff8080; }
+.diff-add    { background: #1a3d2a; color: #6fffb0; }
+.diff-more   { font-size: 10px; color: var(--text-muted); padding-top: 3px; }
 
 /* ── Action buttons ── */
 .actions {
@@ -426,6 +456,119 @@ function formatDetail(name, input) {
   return truncate(JSON.stringify(input), 160);
 }
 
+/** Rich DOM rendering for command block. Handles Edit diff, Write preview, Bash scroll. */
+
+// ── LCS-based line diff (ported from claude-island ToolResultViews.swift) ──
+function computeLCS(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m + 1}, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  const lcs = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i-1] === b[j-1]) { lcs.unshift(a[i-1]); i--; j--; }
+    else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) j--;
+    else i--;
+  }
+  return lcs;
+}
+
+function lcsLineDiff(oldStr, newStr) {
+  const oldLines = String(oldStr || "").split("\n");
+  const newLines = String(newStr || "").split("\n");
+  // Guard against O(m*n) blowup on huge inputs
+  if (oldLines.length * newLines.length > 200_000) return null;
+  const lcs = computeLCS(oldLines, newLines);
+  const result = [];
+  let k = 0;
+  for (const line of oldLines) { if (k < lcs.length && line === lcs[k]) k++; else result.push({t: "del", s: line}); }
+  k = 0;
+  for (const line of newLines) { if (k < lcs.length && line === lcs[k]) k++; else result.push({t: "add", s: line}); }
+  return result;
+}
+
+function renderCommandBlock(name, input) {
+  commandBlock.innerHTML = "";
+  commandBlock.classList.remove("scrollable-lg");
+
+  if (!input || typeof input !== "object") {
+    commandBlock.textContent = "";
+    return;
+  }
+
+  if (name === "Edit" && input.file_path) {
+    commandBlock.classList.add("scrollable-lg");
+    const pathEl = document.createElement("div");
+    pathEl.className = "diff-file-path";
+    pathEl.textContent = String(input.file_path);
+    commandBlock.appendChild(pathEl);
+
+    const diff = lcsLineDiff(input.old_string, input.new_string);
+    if (diff) {
+      const MAX = 200;
+      const shown = diff.slice(0, MAX);
+      for (const {t, s} of shown) {
+        const el = document.createElement("div");
+        el.className = "diff-line " + (t === "del" ? "diff-remove" : "diff-add");
+        el.textContent = (t === "del" ? "- " : "+ ") + s;
+        commandBlock.appendChild(el);
+      }
+      if (diff.length > MAX) {
+        const more = document.createElement("div");
+        more.style.cssText = "color:rgba(255,255,255,.3);padding:4px 8px;font-size:11px";
+        more.textContent = `… ${diff.length - MAX} more lines`;
+        commandBlock.appendChild(more);
+      }
+    } else {
+      // Fallback for huge inputs
+      const addLines = (str, cls) => {
+        if (!str) return;
+        const prefix = cls === "diff-remove" ? "- " : "+ ";
+        for (const line of String(str).split("\n")) {
+          const el = document.createElement("div");
+          el.className = "diff-line " + cls;
+          el.textContent = prefix + line;
+          commandBlock.appendChild(el);
+        }
+      };
+      addLines(input.old_string, "diff-remove");
+      addLines(input.new_string, "diff-add");
+    }
+    return;
+  }
+
+  if (name === "Write" && input.file_path) {
+    commandBlock.classList.add("scrollable-lg");
+    const pathEl = document.createElement("div");
+    pathEl.className = "diff-file-path";
+    pathEl.textContent = String(input.file_path);
+    commandBlock.appendChild(pathEl);
+
+    if (input.content) {
+      const lines = String(input.content).split("\n");
+      const preview = lines.slice(0, 15);
+      for (const line of preview) {
+        const el = document.createElement("div");
+        el.className = "diff-line";
+        el.textContent = line;
+        commandBlock.appendChild(el);
+      }
+      if (lines.length > 15) {
+        const more = document.createElement("div");
+        more.className = "diff-more";
+        more.textContent = `…(${lines.length - 15} more lines)`;
+        commandBlock.appendChild(more);
+      }
+    }
+    return;
+  }
+
+  // Fallback: plain text
+  commandBlock.textContent = formatDetail(name, input);
+}
+
 function truncate(s, max) {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + "\u2026";
@@ -541,7 +684,7 @@ function show(data) {
   toolPill.setAttribute("data-tool", data.toolName || "");
   toolPill.style.display = "";
   headerLabel.textContent = data.lang === "zh" ? "\u6743\u9650\u8BF7\u6C42" : "Permission";
-  commandBlock.textContent = formatDetail(data.toolName, data.toolInput);
+  renderCommandBlock(data.toolName, data.toolInput);
   btnAllow.textContent = data.lang === "zh" ? "\u6279\u51C6" : "Allow";
   btnDeny.textContent  = data.lang === "zh" ? "\u62D2\u7EDD" : "Deny";
   btnDeny.style.display = "";

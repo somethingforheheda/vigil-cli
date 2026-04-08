@@ -74,6 +74,12 @@ export interface SessionEventUpdate {
   displaySvg?: string | null;
   title?: string | null;
   subagentId?: string | null;
+  // Rich hook fields
+  toolName?: string | null;
+  toolInput?: unknown;
+  toolUseId?: string | null;
+  errorType?: string | null;
+  agentType?: string | null;
 }
 
 /** Internal session record stored in the sessions Map */
@@ -92,6 +98,11 @@ export interface SessionRecord {
   title: string | null;
   pidReachable: boolean;
   subagents: Set<string>;
+  // Rich hook fields
+  currentTool: string | null;
+  currentToolInput: unknown;
+  lastError: string | null;
+  currentAgentType: string | null;
 }
 
 /** Serializable session snapshot sent to the list renderer via IPC */
@@ -105,4 +116,36 @@ export interface SessionSnapshot {
   host: string | null;
   headless: boolean;
   subagentCount: number;
+  // Rich hook fields
+  currentTool: string | null;
+  currentToolInput: unknown;
+  lastError: string | null;
+}
+
+/**
+ * Strongly-typed hook event parsed from raw HTTP payload.
+ * Output of HookPayloadParser.parse().
+ */
+export interface RichHookEvent {
+  sessionId: string;
+  state: AgentState;
+  event: string;
+  cwd: string;
+  title: string | null;
+  sourcePid: number | null;
+  agentPid: number | null;
+  agentId: string | null;
+  host: string | null;
+  headless: boolean;
+  pidChain: number[] | null;
+  editor: string | null;
+  subagentId: string | null;
+  source: string | null;
+  // Rich fields
+  toolName: string | null;
+  toolInput: unknown;
+  toolUseId: string | null;
+  errorType: string | null;
+  agentType: string | null;
+  trigger: string | null;
 }

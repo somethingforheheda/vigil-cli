@@ -387,7 +387,17 @@ var EVENT_TO_STATE = {
   PostCompact: "attention",
   Notification: "notification",
   Elicitation: "notification",
-  WorktreeCreate: "carrying"
+  ElicitationResult: "notification",
+  WorktreeCreate: "carrying",
+  WorktreeRemove: "carrying",
+  PermissionDenied: "attention",
+  ConfigChange: "idle",
+  InstructionsLoaded: "idle",
+  CwdChanged: "working",
+  Setup: "idle",
+  TeammateIdle: "idle",
+  TaskCreated: "working",
+  TaskCompleted: "attention"
 };
 var event = process.argv[2];
 var state = EVENT_TO_STATE[event];
@@ -433,14 +443,20 @@ process.stdin.on("end", () => {
       } catch {
       }
     }
-    send(sessionId, cwd, String(payload.source ?? payload.reason ?? ""), sessionTitle, subagentId);
+    const toolName = payload.tool_name != null ? String(payload.tool_name) : void 0;
+    const toolInput = payload.tool_input !== void 0 ? payload.tool_input : void 0;
+    const toolUseId = payload.tool_use_id != null ? String(payload.tool_use_id) : void 0;
+    const error = payload.error != null ? String(payload.error) : void 0;
+    const agentType = payload.agent_type != null ? String(payload.agent_type) : void 0;
+    const trigger = payload.trigger != null ? String(payload.trigger) : void 0;
+    send(sessionId, cwd, source, sessionTitle, subagentId, { toolName, toolInput, toolUseId, error, agentType, trigger });
     return;
   } catch {
   }
   send(sessionId, cwd, "", sessionTitle, subagentId);
 });
 setTimeout(() => send("default", "", "", "", ""), 400);
-function send(sessionId, cwd, source, sessionTitle, subagentId) {
+function send(sessionId, cwd, source, sessionTitle, subagentId, extras) {
   if (sent) return;
   sent = true;
   const resolvedState = event === "SessionEnd" && source === "clear" ? "sweeping" : state;
@@ -451,6 +467,19 @@ function send(sessionId, cwd, source, sessionTitle, subagentId) {
   }
   if (cwd) body.cwd = cwd;
   if (sessionTitle) body.title = sessionTitle;
+  if (extras) {
+    if (extras.toolName) body.tool_name = extras.toolName;
+    if (extras.toolInput !== void 0) body.tool_input = extras.toolInput;
+    if (extras.toolUseId) body.tool_use_id = extras.toolUseId;
+    if (extras.error && (event === "StopFailure" || event === "PostToolUseFailure")) {
+      body.error = extras.error;
+    }
+    if (extras.agentType && event === "SubagentStart") body.agent_type = extras.agentType;
+    if (extras.trigger && (event === "PreCompact" || event === "PostCompact")) {
+      body.trigger = extras.trigger;
+    }
+    if (source && event === "SessionStart") body.source = source;
+  }
   if (process.env.VIGILCLI_REMOTE) {
     body.host = readHostPrefix();
   } else {

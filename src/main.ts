@@ -49,6 +49,7 @@ if (isWin) {
 let lang: "en" | "zh" = "zh";
 let listWin: BrowserWindow | null = null;
 let listWinHeightAnim: ReturnType<typeof setInterval> | null = null;
+let listWinPosAnim: ReturnType<typeof setInterval> | null = null;
 let tray: Electron.Tray | null = null;
 let contextMenuOwner: BrowserWindow | null = null;
 let contextMenu: Electron.Menu | null = null;
@@ -356,6 +357,9 @@ function sendSessionsUpdate(): void {
       host: s.host ?? null,
       headless: s.headless ?? false,
       subagentCount: s.subagents ? s.subagents.size : 0,
+      currentTool: s.currentTool ?? null,
+      currentToolInput: s.currentToolInput ?? null,
+      lastError: s.lastError ?? null,
     });
   }
   listWin.webContents.send(IpcChannels.SESSIONS_UPDATE, arr);
@@ -389,6 +393,23 @@ function installTerminalFocusExtension(): void {
       console.warn(`VigilCLI: failed to install extension to ${dest}:`, (err as Error).message);
     }
   }
+}
+
+function animateWindowPos(fromX: number, fromY: number, toX: number, toY: number): void {
+  if (listWinPosAnim) { clearInterval(listWinPosAnim); listWinPosAnim = null; }
+  const DURATION = 300, INTERVAL = 16;
+  const steps = Math.ceil(DURATION / INTERVAL);
+  let step = 0;
+  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+  listWinPosAnim = setInterval(() => {
+    if (!listWin || listWin.isDestroyed()) { clearInterval(listWinPosAnim!); listWinPosAnim = null; return; }
+    step++;
+    const t = easeOut(Math.min(step / steps, 1));
+    const x = Math.round(fromX + (toX - fromX) * t);
+    const y = Math.round(fromY + (toY - fromY) * t);
+    listWin.setPosition(x, y);
+    if (step >= steps) { clearInterval(listWinPosAnim!); listWinPosAnim = null; savePrefs(); }
+  }, INTERVAL);
 }
 
 function createWindow(): void {
@@ -430,7 +451,7 @@ function createWindow(): void {
     transparent: true,
     alwaysOnTop: true,
     resizable: true,
-    minWidth:  260,
+    minWidth:  52,
     maxWidth:  520,
     minHeight: 30,
     skipTaskbar: true,
@@ -507,6 +528,53 @@ function createWindow(): void {
     windowOpacity = Math.min(1, Math.max(0.1, value));
     if (listWin && !listWin.isDestroyed()) listWin.setOpacity(windowOpacity);
     savePrefs();
+  });
+
+  // ── Drag: move window without animation ──
+  ipcMain.on("move-window", (_event, { dx, dy }: { dx: number; dy: number }) => {
+    if (!listWin || listWin.isDestroyed()) return;
+    const [x, y] = listWin.getPosition();
+    listWin.setPosition(x + dx, y + dy);
+  });
+
+  // ── Drag end: edge-snap animation ──
+  ipcMain.on("snap-to-edge", (_event, { x, y }: { x: number; y: number }) => {
+    if (!listWin || listWin.isDestroyed()) return;
+    const { width, height } = listWin.getBounds();
+    const mid = { x: x + Math.floor(width / 2), y: y + Math.floor(height / 2) };
+    const display = screen.getDisplayNearestPoint(mid);
+    const { x: wx, y: wy, width: dw, height: dh } = display.workArea;
+    const THRESHOLD = 60, MARGIN = 20;
+    let targetX = x, targetY = y;
+    if (x - wx < THRESHOLD)                   targetX = wx + MARGIN;
+    else if ((wx + dw) - (x + width) < THRESHOLD) targetX = wx + dw - width - MARGIN;
+    if (y - wy < THRESHOLD)                   targetY = wy + MARGIN;
+    else if ((wy + dh) - (y + height) < THRESHOLD) targetY = wy + dh - height - MARGIN;
+    if (targetX !== x || targetY !== y) animateWindowPos(x, y, targetX, targetY);
+    else savePrefs();
+  });
+
+  // ── Mode switch: resize window for ORB/PEEK/PANEL ──
+  ipcMain.on(IpcChannels.WINDOW_SIZE, (_event, { width, height }: { width: number; height: number }) => {
+    if (!listWin || listWin.isDestroyed()) return;
+    const { x, y, width: oldW, height: oldH } = listWin.getBounds();
+    const newW = Math.max(52, Math.min(520, width));
+    const newH = Math.max(40, height);
+    if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2) return;
+    if (listWinHeightAnim) { clearInterval(listWinHeightAnim); listWinHeightAnim = null; }
+    const DURATION = 300, INTERVAL = 16;
+    const steps = Math.ceil(DURATION / INTERVAL);
+    let step = 0;
+    const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+    listWinHeightAnim = setInterval(() => {
+      if (!listWin || listWin.isDestroyed()) { clearInterval(listWinHeightAnim!); listWinHeightAnim = null; return; }
+      step++;
+      const t = easeOut(Math.min(step / steps, 1));
+      const w = Math.round(oldW + (newW - oldW) * t);
+      const h = Math.round(oldH + (newH - oldH) * t);
+      listWin.setBounds({ x, y, width: w, height: h });
+      if (step >= steps) { clearInterval(listWinHeightAnim!); listWinHeightAnim = null; }
+    }, INTERVAL);
   });
 
   // ── Renderer ready ──

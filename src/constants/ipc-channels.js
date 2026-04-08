@@ -21,4 +21,8 @@ exports.IpcChannels = {
     // Bubble renderer → Main
     PERMISSION_DECIDE: "permission-decide",
     BUBBLE_HEIGHT: "bubble-height",
+    // Main → List renderer (mode control)
+    COLLAPSE_TO_ORB: "collapse-to-orb",
+    // List renderer → Main (window resize for mode switching)
+    WINDOW_SIZE: "window-size",
 };

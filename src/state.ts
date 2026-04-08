@@ -24,6 +24,7 @@ import {
 } from "./constants/states";
 import { IpcChannels } from "./constants/ipc-channels";
 import { buildScanCommand } from "../agents/registry";
+import { SessionDataStore } from "./data/SessionDataStore";
 
 export function initState(ctx: StateContext) {
 
@@ -39,9 +40,9 @@ const DISPLAY_HINT_SVGS = new Set<string>([
 ]);
 
 // ── Session tracking ──
-const sessions = new Map<string, SessionRecord>();
-const SESSION_STALE_MS = 600_000;
-const WORKING_STALE_MS = 300_000;
+const store = new SessionDataStore();
+/** Alias for read-only access; mutations go through store.set/delete */
+const sessions: ReadonlyMap<string, SessionRecord> = store.map;
 let isRecoveringSession = false;
 let startupRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 const STARTUP_RECOVERY_MAX_MS = 300_000;
@@ -56,6 +57,28 @@ let pendingState: AgentState | null = null;
 // ── Stale cleanup ──
 let staleCleanupTimer: ReturnType<typeof setInterval> | null = null;
 let isScanInFlight = false;
+
+// ── Idle collapse timer (20 min all-idle → send collapse-to-orb) ──
+const IDLE_COLLAPSE_MS = 1_200_000;
+let idleCollapseTimer: ReturnType<typeof setTimeout> | null = null;
+
+function checkIdleCollapse(): void {
+  if (store.size === 0) {
+    if (idleCollapseTimer) { clearTimeout(idleCollapseTimer); idleCollapseTimer = null; }
+    return;
+  }
+  const allIdle = Array.from(store.values()).every(s => s.state === "idle");
+  if (allIdle) {
+    if (!idleCollapseTimer) {
+      idleCollapseTimer = setTimeout(() => {
+        idleCollapseTimer = null;
+        ctx.sendToRenderer(IpcChannels.COLLAPSE_TO_ORB, null);
+      }, IDLE_COLLAPSE_MS);
+    }
+  } else {
+    if (idleCollapseTimer) { clearTimeout(idleCollapseTimer); idleCollapseTimer = null; }
+  }
+}
 
 // ── Session Dashboard constants ──
 const STATE_EMOJI: Partial<Record<AgentState, string>> = {
@@ -132,7 +155,7 @@ function commitState(state: AgentState): void {
       if (state === "thinking") {
         const now = Date.now();
         let changed = false;
-        for (const [, s] of sessions) {
+        for (const [, s] of store.entries()) {
           if (s.state === "thinking") {
             s.state = "idle"; s.displaySvg = null; s.updatedAt = now; changed = true;
           }
@@ -180,6 +203,10 @@ function applySessionEvent(update: SessionEventUpdate): void {
     displaySvg,
     title = null,
     subagentId = null,
+    toolName = null,
+    toolInput,
+    errorType = null,
+    agentType = null,
   } = update;
 
   if (isRecoveringSession) {
@@ -188,18 +215,41 @@ function applySessionEvent(update: SessionEventUpdate): void {
   }
 
   if (event === "PermissionRequest") {
-    // Update session state so list UI shows notification badge
-    const existing = sessions.get(sessionId);
+    const existing = store.get(sessionId);
     if (existing) {
       existing.state = "notification";
       existing.updatedAt = Date.now();
+    } else {
+      // Session record is gone (PID died, stale-cleaned, etc.) but Claude Code is
+      // still running. Create a minimal record so the card appears and the idle
+      // collapse timer is blocked.
+      store.set(sessionId, {
+        state: "notification",
+        updatedAt: Date.now(),
+        displaySvg: null,
+        sourcePid: sourcePid || null,
+        cwd: cwd || "",
+        editor: editor || null,
+        pidChain: (pidChain && pidChain.length) ? pidChain : null,
+        agentPid: agentPid || null,
+        agentId: agentId || null,
+        host: host || null,
+        headless: headless || false,
+        title: title || null,
+        pidReachable: sourcePid ? isProcessAlive(sourcePid) : false,
+        subagents: new Set<string>(),
+        currentTool: null,
+        currentToolInput: null,
+        lastError: null,
+        currentAgentType: null,
+      });
     }
     setState("notification");
     sendSessionsUpdate();
     return;
   }
 
-  const existing = sessions.get(sessionId);
+  const existing = store.get(sessionId);
   const srcPid = sourcePid || (existing && existing.sourcePid) || null;
   const srcCwd = cwd || (existing && existing.cwd) || "";
   const srcEditor = editor || (existing && existing.editor) || null;
@@ -226,15 +276,20 @@ function applySessionEvent(update: SessionEventUpdate): void {
     title: srcTitle,
     pidReachable,
     subagents: existing && existing.subagents ? existing.subagents : new Set<string>(),
+    // Rich hook fields — preserve existing values unless overridden
+    currentTool: existing ? existing.currentTool : null,
+    currentToolInput: existing ? existing.currentToolInput : null,
+    lastError: existing ? existing.lastError : null,
+    currentAgentType: existing ? existing.currentAgentType : null,
   };
 
   if (event === "SessionEnd") {
-    const endingSession = sessions.get(sessionId);
-    sessions.delete(sessionId);
+    const endingSession = store.get(sessionId);
+    store.delete(sessionId);
     cleanStaleSessions();
     if (!endingSession || !endingSession.headless) {
       let hasLiveInteractive = false;
-      for (const s of sessions.values()) {
+      for (const s of store.values()) {
         if (!s.headless) { hasLiveInteractive = true; break; }
       }
       // /clear sends sweeping — play it even if other sessions are active
@@ -253,7 +308,7 @@ function applySessionEvent(update: SessionEventUpdate): void {
     sendSessionsUpdate();
     return;
   } else if (state === "attention" || state === "notification") {
-    sessions.set(sessionId, { state: "idle", updatedAt: Date.now(), displaySvg: null, ...base });
+    store.set(sessionId, { state: "idle", updatedAt: Date.now(), displaySvg: null, ...base });
   } else if (ONESHOT_STATES.has(state)) {
     if (existing) {
       existing.updatedAt = Date.now();
@@ -264,7 +319,7 @@ function applySessionEvent(update: SessionEventUpdate): void {
       if (pidChain && pidChain.length) existing.pidChain = pidChain;
       if (agentPid) existing.agentPid = agentPid;
     } else {
-      sessions.set(sessionId, { state: "idle", updatedAt: Date.now(), displaySvg: null, ...base });
+      store.set(sessionId, { state: "idle", updatedAt: Date.now(), displaySvg: null, ...base });
     }
   } else {
     if (existing && existing.state === "juggling" && state === "working" && event !== "SubagentStop" && event !== "subagentStop") {
@@ -272,19 +327,39 @@ function applySessionEvent(update: SessionEventUpdate): void {
       existing.displaySvg = pickDisplaySvg("juggling", existing, displaySvg);
     } else {
       const ds = pickDisplaySvg(state, existing, displaySvg);
-      sessions.set(sessionId, { state, updatedAt: Date.now(), displaySvg: ds, ...base });
+      store.set(sessionId, { state, updatedAt: Date.now(), displaySvg: ds, ...base });
     }
   }
 
   // Track active subagents per session
   if (subagentId) {
-    const entry = sessions.get(sessionId);
+    const entry = store.get(sessionId);
     if (entry) {
       if (event === "SubagentStart") {
         entry.subagents.add(subagentId);
       } else if (event === "SubagentStop" || event === "subagentStop") {
         entry.subagents.delete(subagentId);
       }
+    }
+  }
+
+  // ── Rich hook event handling ──
+  const entry = store.get(sessionId);
+  if (entry) {
+    if (event === "PreToolUse") {
+      entry.currentTool = toolName;
+      entry.currentToolInput = toolInput !== undefined ? toolInput : null;
+    } else if (event === "PostToolUse") {
+      entry.currentTool = null;
+      entry.currentToolInput = null;
+    } else if (event === "PostToolUseFailure") {
+      entry.currentTool = null;
+      entry.currentToolInput = null;
+      if (errorType) entry.lastError = errorType;
+    } else if (event === "StopFailure") {
+      if (errorType) entry.lastError = errorType;
+    } else if (event === "SubagentStart") {
+      if (agentType) entry.currentAgentType = agentType;
     }
   }
 
@@ -307,65 +382,17 @@ function isProcessAlive(pid: number): boolean {
 }
 
 function cleanStaleSessions(): void {
-  const now = Date.now();
-  let changed = false;
-  let removedNonHeadless = false;
-  for (const [id, s] of sessions) {
-    const age = now - s.updatedAt;
-
-    if (s.pidReachable && s.agentPid && !isProcessAlive(s.agentPid)) {
-      if (!s.headless) removedNonHeadless = true;
-      sessions.delete(id); changed = true;
-      continue;
-    }
-
-    // Fast cleanup: if source process died while session is in an active state,
-    // don't wait for WORKING_STALE_MS — clean up on the next cycle (~10s).
-    if (
-      (s.state === "thinking" || s.state === "working" || s.state === "juggling") &&
-      s.pidReachable && s.sourcePid && !isProcessAlive(s.sourcePid)
-    ) {
-      if (!s.headless) removedNonHeadless = true;
-      sessions.delete(id); changed = true;
-      continue;
-    }
-
-    if (age > SESSION_STALE_MS) {
-      if (s.pidReachable && s.sourcePid) {
-        if (!isProcessAlive(s.sourcePid)) {
-          if (!s.headless) removedNonHeadless = true;
-          sessions.delete(id); changed = true;
-        } else if (s.state !== "idle") {
-          s.state = "idle"; s.displaySvg = null; changed = true;
-        }
-      } else if (!s.pidReachable) {
-        if (!s.headless) removedNonHeadless = true;
-        sessions.delete(id); changed = true;
-      } else {
-        if (!s.headless) removedNonHeadless = true;
-        sessions.delete(id); changed = true;
-      }
-    } else if (age > WORKING_STALE_MS) {
-      if (s.pidReachable && s.sourcePid && !isProcessAlive(s.sourcePid)) {
-        if (!s.headless) removedNonHeadless = true;
-        sessions.delete(id); changed = true;
-      } else if (s.state === "working" || s.state === "juggling" || s.state === "thinking") {
-        s.state = "idle"; s.displaySvg = null; s.updatedAt = now; changed = true;
-      }
-    }
-  }
-  if (changed && sessions.size === 0) {
-    if (removedNonHeadless) {
-      setState("sleeping");
+  const { changed, removedNonHeadless } = store.cleanStaleSessions();
+  if (changed) {
+    if (store.size === 0) {
+      if (removedNonHeadless) setState("sleeping");
+      else setState("idle");
     } else {
-      setState("idle");
+      setState(pickDisplayState());
     }
-  } else if (changed) {
-    setState(pickDisplayState());
+    sendSessionsUpdate();
   }
-  if (changed) sendSessionsUpdate();
-
-  if (isRecoveringSession && sessions.size === 0) {
+  if (isRecoveringSession && store.size === 0) {
     scanActiveAgents((found) => {
       if (!found) {
         isRecoveringSession = false;
@@ -402,10 +429,10 @@ function stopStaleCleanup(): void {
 }
 
 function pickDisplayState(): AgentState {
-  if (sessions.size === 0) return "idle";
+  if (store.size === 0) return "idle";
   let best: AgentState = "sleeping";
   let hasNonHeadless = false;
-  for (const [, s] of sessions) {
+  for (const [, s] of store.entries()) {
     if (s.headless) continue;
     hasNonHeadless = true;
     if ((STATE_PRIORITY[s.state] || 0) > (STATE_PRIORITY[best] || 0)) best = s.state;
@@ -423,7 +450,7 @@ function sendSessionsUpdate(): void {
   }
   // Fallback: build snapshot array and send directly
   const snapshots: SessionSnapshot[] = [];
-  for (const [id, s] of sessions) {
+  for (const [id, s] of store.entries()) {
     snapshots.push({
       sessionId: id,
       agentId: s.agentId,
@@ -434,9 +461,13 @@ function sendSessionsUpdate(): void {
       host: s.host,
       headless: s.headless,
       subagentCount: s.subagents.size,
+      currentTool: s.currentTool,
+      currentToolInput: s.currentToolInput,
+      lastError: s.lastError,
     });
   }
   ctx.sendToRenderer(IpcChannels.SESSIONS_UPDATE, snapshots);
+  checkIdleCollapse();
 }
 
 // ── Session Dashboard ──
@@ -471,7 +502,7 @@ interface MenuItem {
 
 function buildSessionSubmenu(): MenuItem[] {
   const entries: SessionMenuEntry[] = [];
-  for (const [id, s] of sessions) {
+  for (const [id, s] of store.entries()) {
     entries.push({
       id, state: s.state, updatedAt: s.updatedAt, sourcePid: s.sourcePid,
       cwd: s.cwd, editor: s.editor, pidChain: s.pidChain, host: s.host, headless: s.headless,
@@ -568,6 +599,7 @@ function cleanup(): void {
   if (pendingTimer) clearTimeout(pendingTimer);
   if (autoReturnTimer) clearTimeout(autoReturnTimer);
   if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer);
+  if (idleCollapseTimer) { clearTimeout(idleCollapseTimer); idleCollapseTimer = null; }
   stopStaleCleanup();
 }
 

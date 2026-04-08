@@ -46,6 +46,7 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const server_config_1 = require("../hooks/dist/server-config");
+const HookPayloadParser_1 = require("./data/HookPayloadParser");
 function initServer(ctx) {
     let httpServer = null;
     let activeServerPort = null;
@@ -117,7 +118,7 @@ function initServer(ctx) {
         res.end(body);
     }
     // Truncate large string values in objects (recursive) — bubble only needs a preview
-    const PREVIEW_MAX = 500;
+    const PREVIEW_MAX = 20_000;
     function truncateDeep(obj, depth = 0) {
         if (depth > 10)
             return obj;
@@ -187,7 +188,7 @@ function initServer(ctx) {
                     if (tooLarge)
                         return;
                     bodySize += chunk.length;
-                    if (bodySize > 1024) {
+                    if (bodySize > 102_400) {
                         tooLarge = true;
                         return;
                     }
@@ -199,83 +200,47 @@ function initServer(ctx) {
                         res.end("state payload too large");
                         return;
                     }
-                    try {
-                        const data = JSON.parse(body);
-                        const { state, svg, session_id, event } = data;
-                        let display_svg;
-                        if (data.display_svg === null)
-                            display_svg = null;
-                        else if (typeof data.display_svg === "string")
-                            display_svg = path.basename(data.display_svg);
-                        else
-                            display_svg = undefined;
-                        const source_pid = Number.isFinite(data.source_pid) && data.source_pid > 0
-                            ? Math.floor(data.source_pid) : null;
-                        const cwd = typeof data.cwd === "string" ? data.cwd : "";
-                        const editor = (data.editor === "code" || data.editor === "cursor") ? data.editor : null;
-                        const pidChain = Array.isArray(data.pid_chain)
-                            ? data.pid_chain.filter((n) => Number.isFinite(n) && n > 0)
-                            : null;
-                        const rawAgentPid = data.agent_pid ?? data.claude_pid ?? data.cursor_pid;
-                        const agentPid = Number.isFinite(rawAgentPid) && rawAgentPid > 0
-                            ? Math.floor(rawAgentPid) : null;
-                        const agentId = typeof data.agent_id === "string" ? data.agent_id : "claude-code";
-                        const host = typeof data.host === "string" ? data.host : null;
-                        const headless = data.headless === true;
-                        const title = typeof data.title === "string" ? data.title.slice(0, 200) : null;
-                        const subagentId = typeof data.subagent_id === "string" ? data.subagent_id : null;
-                        // Use ctx.validStates for O(1) lookup (replaces ctx.STATE_SVGS[state])
-                        if (typeof state === "string" && ctx.validStates.has(state)) {
-                            const sid = (typeof session_id === "string" && session_id) ? session_id : "default";
-                            if (typeof state === "string" && state.startsWith("mini-") && !svg) {
-                                res.writeHead(400);
-                                res.end("mini states require svg override");
-                                return;
-                            }
-                            if (event === "PostToolUse" || event === "PostToolUseFailure" || event === "Stop") {
-                                for (const perm of [...ctx.pendingPermissions]) {
-                                    if (perm.sessionId === sid) {
-                                        ctx.resolvePermissionEntry(perm, "deny", "User answered in terminal");
-                                    }
-                                }
-                            }
-                            if (svg && typeof svg === "string") {
-                                // Direct state+svg override (e.g. mini mode from old hook)
-                                // Server context doesn't expose setState directly; skip or no-op
-                                // (mini states are typically handled by main.ts setState)
-                                res.writeHead(200, { [server_config_1.VIGILCLI_SERVER_HEADER]: server_config_1.VIGILCLI_SERVER_ID });
-                                res.end("ok");
-                            }
-                            else {
-                                ctx.applySessionEvent({
-                                    sessionId: sid,
-                                    state: state,
-                                    event: typeof event === "string" ? event : "",
-                                    sourcePid: source_pid,
-                                    cwd,
-                                    editor,
-                                    pidChain,
-                                    agentPid,
-                                    agentId,
-                                    host,
-                                    headless,
-                                    displaySvg: display_svg,
-                                    title,
-                                    subagentId,
-                                });
-                            }
-                            res.writeHead(200, { [server_config_1.VIGILCLI_SERVER_HEADER]: server_config_1.VIGILCLI_SERVER_ID });
-                            res.end("ok");
-                        }
-                        else {
-                            res.writeHead(400);
-                            res.end("unknown state");
-                        }
-                    }
-                    catch {
+                    const parsed = (0, HookPayloadParser_1.parseHookPayload)(body, ctx.validStates);
+                    if (!parsed) {
                         res.writeHead(400);
-                        res.end("bad json");
+                        res.end("bad json or unknown state");
+                        return;
                     }
+                    const { sessionId: sid, state, event } = parsed;
+                    if (typeof state === "string" && state.startsWith("mini-") && !body.includes('"svg"')) {
+                        res.writeHead(400);
+                        res.end("mini states require svg override");
+                        return;
+                    }
+                    if (event === "PostToolUse" || event === "PostToolUseFailure" || event === "Stop") {
+                        for (const perm of [...ctx.pendingPermissions]) {
+                            if (perm.sessionId === sid) {
+                                ctx.resolvePermissionEntry(perm, "deny", "User answered in terminal");
+                            }
+                        }
+                    }
+                    ctx.applySessionEvent({
+                        sessionId: sid,
+                        state,
+                        event,
+                        sourcePid: parsed.sourcePid,
+                        cwd: parsed.cwd,
+                        editor: parsed.editor,
+                        pidChain: parsed.pidChain,
+                        agentPid: parsed.agentPid,
+                        agentId: parsed.agentId,
+                        host: parsed.host,
+                        headless: parsed.headless,
+                        title: parsed.title,
+                        subagentId: parsed.subagentId,
+                        toolName: parsed.toolName,
+                        toolInput: parsed.toolInput,
+                        toolUseId: parsed.toolUseId,
+                        errorType: parsed.errorType,
+                        agentType: parsed.agentType,
+                    });
+                    res.writeHead(200, { [server_config_1.VIGILCLI_SERVER_HEADER]: server_config_1.VIGILCLI_SERVER_ID });
+                    res.end("ok");
                 });
             }
             else if (req.method === "POST" && req.url === "/permission") {
@@ -309,6 +274,7 @@ function initServer(ctx) {
                         const toolName = typeof data.tool_name === "string" ? data.tool_name : "Unknown";
                         const rawInput = data.tool_input && typeof data.tool_input === "object" ? data.tool_input : {};
                         const toolInput = truncateDeep(rawInput);
+                        ctx.permLog(`toolInput keys=${Object.keys(rawInput).join(",")} old_string_len=${typeof rawInput.old_string === "string" ? rawInput.old_string.length : "N/A"}`);
                         const sessionId = (typeof data.session_id === "string" && data.session_id) ? data.session_id : "default";
                         const rawSuggestions = Array.isArray(data.permission_suggestions) ? data.permission_suggestions : [];
                         const addRulesItems = rawSuggestions.filter((s) => s && s.type === "addRules");

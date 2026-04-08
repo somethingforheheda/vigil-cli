@@ -27,7 +27,17 @@ const EVENT_TO_STATE: Record<string, string> = {
   PostCompact: "attention",
   Notification: "notification",
   Elicitation: "notification",
+  ElicitationResult: "notification",
   WorktreeCreate: "carrying",
+  WorktreeRemove: "carrying",
+  PermissionDenied: "attention",
+  ConfigChange: "idle",
+  InstructionsLoaded: "idle",
+  CwdChanged: "working",
+  Setup: "idle",
+  TeammateIdle: "idle",
+  TaskCreated: "working",
+  TaskCompleted: "attention",
 };
 
 const event = process.argv[2];
@@ -73,7 +83,16 @@ process.stdin.on("end", () => {
       } catch {}
     }
     void source; // used indirectly via resolvedState below
-    send(sessionId, cwd, String(payload.source ?? payload.reason ?? ""), sessionTitle, subagentId);
+
+    // Extract rich hook fields
+    const toolName = payload.tool_name != null ? String(payload.tool_name) : undefined;
+    const toolInput = payload.tool_input !== undefined ? payload.tool_input : undefined;
+    const toolUseId = payload.tool_use_id != null ? String(payload.tool_use_id) : undefined;
+    const error = payload.error != null ? String(payload.error) : undefined;
+    const agentType = payload.agent_type != null ? String(payload.agent_type) : undefined;
+    const trigger = payload.trigger != null ? String(payload.trigger) : undefined;
+
+    send(sessionId, cwd, source, sessionTitle, subagentId, { toolName, toolInput, toolUseId, error, agentType, trigger });
     return;
   } catch {}
   send(sessionId, cwd, "", sessionTitle, subagentId);
@@ -82,7 +101,21 @@ process.stdin.on("end", () => {
 // Safety: if stdin doesn't end in 400ms, send with default session
 setTimeout(() => send("default", "", "", "", ""), 400);
 
-function send(sessionId: string, cwd: string, source: string, sessionTitle: string, subagentId: string): void {
+function send(
+  sessionId: string,
+  cwd: string,
+  source: string,
+  sessionTitle: string,
+  subagentId: string,
+  extras?: {
+    toolName?: string;
+    toolInput?: unknown;
+    toolUseId?: string;
+    error?: string;
+    agentType?: string;
+    trigger?: string;
+  },
+): void {
   if (sent) return;
   sent = true;
 
@@ -96,6 +129,21 @@ function send(sessionId: string, cwd: string, source: string, sessionTitle: stri
   }
   if (cwd) body.cwd = cwd;
   if (sessionTitle) body.title = sessionTitle;
+
+  // Rich hook fields
+  if (extras) {
+    if (extras.toolName) body.tool_name = extras.toolName;
+    if (extras.toolInput !== undefined) body.tool_input = extras.toolInput;
+    if (extras.toolUseId) body.tool_use_id = extras.toolUseId;
+    if (extras.error && (event === "StopFailure" || event === "PostToolUseFailure")) {
+      body.error = extras.error;
+    }
+    if (extras.agentType && event === "SubagentStart") body.agent_type = extras.agentType;
+    if (extras.trigger && (event === "PreCompact" || event === "PostCompact")) {
+      body.trigger = extras.trigger;
+    }
+    if (source && event === "SessionStart") body.source = source;
+  }
 
   if (process.env.VIGILCLI_REMOTE) {
     body.host = readHostPrefix();

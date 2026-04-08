@@ -28,4 +28,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.send(IpcChannels.SET_OPACITY, opacity),
   onPlaySound: (cb: (name: string) => void) =>
     ipcRenderer.on("play-sound", (_: Electron.IpcRendererEvent, name: string) => cb(name)),
+  // ── Drag / snap / mode collapse ──
+  dragWindow: (dx: number, dy: number) =>
+    ipcRenderer.send("move-window", { dx, dy }),
+  snapToEdge: (x: number, y: number) =>
+    ipcRenderer.send("snap-to-edge", { x, y }),
+  onCollapseToOrb: (cb: () => void) =>
+    ipcRenderer.on(IpcChannels.COLLAPSE_TO_ORB, () => cb()),
+  reportWindowSize: (width: number, height: number) =>
+    ipcRenderer.send(IpcChannels.WINDOW_SIZE, { width, height }),
 });

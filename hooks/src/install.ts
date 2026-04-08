@@ -16,7 +16,9 @@ import {
 const CORE_HOOKS = [
   "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
   "PostToolUseFailure", "Stop", "SubagentStart", "SubagentStop", "Notification",
-  "Elicitation", "WorktreeCreate",
+  "Elicitation", "ElicitationResult", "WorktreeCreate", "WorktreeRemove",
+  "PermissionDenied", "ConfigChange", "InstructionsLoaded", "CwdChanged",
+  "Setup", "TeammateIdle", "TaskCreated", "TaskCompleted",
 ];
 
 const VERSIONED_HOOKS = [
