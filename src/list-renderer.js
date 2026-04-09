@@ -263,9 +263,10 @@ function updateOrb() {
     }
   }
 
-  // Agent name
+  // State label
   if (nameEl) {
-    nameEl.textContent = top ? (top.agentId || "VC").slice(0, 6) : "VC";
+    const STATE_LABEL = { notification: "perm", attention: "done", juggling: "busy" };
+    nameEl.textContent = top ? (STATE_LABEL[top.state] || top.state || "idle") : "idle";
   }
 
   // Session dots (max 5)
