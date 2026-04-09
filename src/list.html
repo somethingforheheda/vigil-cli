@@ -27,6 +27,7 @@
       --orb-inner:   46px;
     }
 
+    html, body { width: 100%; height: 100%; }
     html { background: transparent; overflow: hidden; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -35,19 +36,29 @@
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
       color: var(--t85);
+      position: relative;
+      --expand-ms: 320ms;
+      --collapse-ms: 280ms;
     }
 
     /* ═══════════════════════════════════
        ORB — 52×52 breathing sphere
        ═══════════════════════════════════ */
     #orb-container {
-      width: var(--orb-outer); height: var(--orb-outer);
-      display: none;
+      position: absolute; inset: 0;
       align-items: center; justify-content: center;
       user-select: none;
       -webkit-user-select: none;
+      display: flex;
+      opacity: 0;
+      visibility: hidden;
+      z-index: 2;
     }
-    body[data-mode="orb"] #orb-container { display: flex; }
+    body[data-mode="orb"] #orb-container,
+    body[data-phase="expanding"] #orb-container {
+      visibility: visible;
+      opacity: 1;
+    }
 
     .orb {
       width: var(--orb-inner); height: var(--orb-inner);
@@ -58,6 +69,8 @@
       gap: 2px;
       cursor: grab;
       animation: orbBreath 3s ease-in-out infinite;
+      transform-origin: center;
+      will-change: transform, opacity;
     }
     .orb:active { cursor: grabbing; }
     .orb-status {
@@ -112,35 +125,49 @@
       100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
     }
     .orb.pop-in   { animation: orbPopIn   .4s cubic-bezier(.34,1.36,.64,1) both; }
-    .orb.exit-out { animation: orbExitOut .15s ease-in both; }
+    .orb.exit-out { animation: orbExitOut .11s ease-in both; }
     .orb.state-pulse { animation: orbStatePulse .4s ease-out; }
-
-    /* ── Panel fade-in ── */
-    @keyframes capFadeIn {
-      from { opacity: 0; transform: scale(0.97); }
-      to   { opacity: 1; transform: scale(1); }
-    }
-    body[data-mode="panel"] #cap {
-      animation: capFadeIn .2s cubic-bezier(.25,.46,.45,.94) both;
-    }
 
     /* ═══════════════════════════════════
        CAPSULE — PEEK + PANEL
        ═══════════════════════════════════ */
     #cap {
-      display: none;
+      position: absolute;
+      inset: 0;
+      display: flex;
       flex-direction: column;
-      background: var(--bg);
+      background: linear-gradient(180deg, #050505 0%, #000 100%);
       border: 1px solid var(--border);
-      border-radius: 20px;
+      border-radius: calc(var(--orb-outer) / 2);
       overflow: hidden;
-      width: 300px;
       box-shadow: none;
-      transition: width .42s cubic-bezier(.34,1.25,.64,1),
-                  border-radius .35s cubic-bezier(.34,1.25,.64,1);
-      will-change: width, border-radius;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      z-index: 1;
+      transition:
+        border-radius var(--expand-ms) cubic-bezier(.22,1,.36,1),
+        opacity 120ms linear;
+      will-change: border-radius, opacity;
     }
-    body[data-mode="panel"] #cap { display: flex; width: 340px; border-radius: 14px; }
+    body[data-mode="panel"] #cap,
+    body[data-phase="expanding"] #cap,
+    body[data-phase="collapsing"] #cap {
+      opacity: 1;
+      visibility: visible;
+    }
+    body[data-mode="panel"] #cap { pointer-events: auto; border-radius: 14px; }
+    body[data-phase="expanding"] #cap {
+      pointer-events: none;
+      border-radius: 14px;
+    }
+    body[data-phase="collapsing"] #cap {
+      pointer-events: none;
+      border-radius: calc(var(--orb-outer) / 2);
+      transition:
+        border-radius var(--collapse-ms) cubic-bezier(.4,0,.2,1),
+        opacity 120ms linear;
+    }
 
     /* ── Capsule bar (always visible) ── */
     #cap-bar {
@@ -149,6 +176,11 @@
       padding: 0 12px 0 10px; gap: 7px;
       cursor: pointer;
       user-select: none;
+      opacity: 0;
+      transform: translateY(-5px) scale(.985);
+      transition:
+        opacity 140ms cubic-bezier(.2,.8,.2,1),
+        transform 180ms cubic-bezier(.2,.8,.2,1);
     }
     body[data-mode="panel"] #cap-bar {
       border-bottom: 1px solid var(--sep);
@@ -207,14 +239,37 @@
 
     /* ── Panel content (grows downward) ── */
     #cap-body {
-      max-height: 0;
+      min-height: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
       overflow: hidden;
-      transition: max-height .42s cubic-bezier(.34,1.25,.64,1);
-      will-change: max-height;
+      opacity: 0;
+      transform: translateY(-6px) scaleY(.96);
+      transform-origin: top center;
+      transition:
+        opacity 160ms cubic-bezier(.2,.8,.2,1),
+        transform 180ms cubic-bezier(.2,.8,.2,1);
+      will-change: opacity, transform;
+    }
+    body[data-content="visible"] #cap-bar,
+    body[data-content="visible"] #cap-body {
+      opacity: 1;
+      transform: none;
+    }
+    body[data-phase="expanding"][data-content="visible"] #cap-bar,
+    body[data-phase="expanding"][data-content="visible"] #cap-body {
+      transition-delay: 70ms;
+    }
+    body[data-phase="collapsing"] #cap-bar,
+    body[data-phase="collapsing"] #cap-body {
+      transition-delay: 0ms;
     }
 
     /* ── Session list ── */
     #slist {
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       max-height: 440px;
     }

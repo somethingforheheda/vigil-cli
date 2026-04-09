@@ -99,6 +99,7 @@ let orbSize = "medium";
 let windowOpacity = 1.0;
 let listCollapsed = false;
 let cardPositions = null;
+let listWinModeAnimating = false;
 const PREFS_PATH = path.join(electron_1.app.getPath("userData"), "vigilcli-prefs.json");
 function loadPrefs() {
     try {
@@ -452,6 +453,69 @@ function animateWindowPos(fromX, fromY, toX, toY) {
         }
     }, INTERVAL);
 }
+function clearListWindowBoundsAnimation() {
+    if (listWinHeightAnim) {
+        clearTimeout(listWinHeightAnim);
+        listWinHeightAnim = null;
+    }
+}
+function animateListWindowBounds(toBounds, duration, options = {}) {
+    if (!listWin || listWin.isDestroyed())
+        return;
+    clearListWindowBoundsAnimation();
+    listWinModeAnimating = Boolean(options.modeTransition);
+    const fromBounds = listWin.getBounds();
+    const unchanged = Math.abs(toBounds.x - fromBounds.x) < 1 &&
+        Math.abs(toBounds.y - fromBounds.y) < 1 &&
+        Math.abs(toBounds.width - fromBounds.width) < 1 &&
+        Math.abs(toBounds.height - fromBounds.height) < 1;
+    if (unchanged || duration <= 0) {
+        listWin.setBounds(toBounds);
+        listWinModeAnimating = false;
+        if (options.onDone)
+            options.onDone();
+        if (options.savePrefsOnDone)
+            savePrefs();
+        return;
+    }
+    const startedAt = Date.now();
+    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+    const tick = () => {
+        if (!listWin || listWin.isDestroyed()) {
+            listWinHeightAnim = null;
+            listWinModeAnimating = false;
+            return;
+        }
+        const rawT = Math.min((Date.now() - startedAt) / duration, 1);
+        const t = easeOut(rawT);
+        listWin.setBounds({
+            x: Math.round(fromBounds.x + (toBounds.x - fromBounds.x) * t),
+            y: Math.round(fromBounds.y + (toBounds.y - fromBounds.y) * t),
+            width: Math.round(fromBounds.width + (toBounds.width - fromBounds.width) * t),
+            height: Math.round(fromBounds.height + (toBounds.height - fromBounds.height) * t),
+        });
+        if (rawT >= 1) {
+            listWinHeightAnim = null;
+            listWinModeAnimating = false;
+            if (options.onDone)
+                options.onDone();
+            if (options.savePrefsOnDone)
+                savePrefs();
+            return;
+        }
+        listWinHeightAnim = setTimeout(tick, 16);
+    };
+    tick();
+}
+function getCenteredBounds(width, height) {
+    if (!listWin || listWin.isDestroyed())
+        return { x: 0, y: 0, width, height };
+    const { x, y, width: oldW, height: oldH } = listWin.getBounds();
+    const centerX = x + oldW / 2;
+    const centerY = y + oldH / 2;
+    const clamped = clampToScreen(Math.round(centerX - width / 2), Math.round(centerY - height / 2), width, height);
+    return { x: clamped.x, y: clamped.y, width, height };
+}
 function createWindow() {
     const prefs = loadPrefs();
     if (prefs && (prefs.lang === "en" || prefs.lang === "zh"))
@@ -554,35 +618,13 @@ function createWindow() {
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.LIST_CONTENT_HEIGHT, (_event, contentHeight) => {
         if (!listWin || listWin.isDestroyed())
             return;
+        if (listWinModeAnimating)
+            return;
         const { x, y, width, height: oldH } = listWin.getBounds();
         const newH = Math.max(30, contentHeight > 0 ? contentHeight : 30);
         if (Math.abs(newH - oldH) < 2)
             return;
-        // Cancel any in-progress animation
-        if (listWinHeightAnim) {
-            clearInterval(listWinHeightAnim);
-            listWinHeightAnim = null;
-        }
-        const DURATION = 180;
-        const INTERVAL = 16;
-        const steps = Math.ceil(DURATION / INTERVAL);
-        let step = 0;
-        const easeOut = (t) => 1 - Math.pow(1 - t, 3);
-        listWinHeightAnim = setInterval(() => {
-            if (!listWin || listWin.isDestroyed()) {
-                clearInterval(listWinHeightAnim);
-                listWinHeightAnim = null;
-                return;
-            }
-            step++;
-            const t = easeOut(Math.min(step / steps, 1));
-            const h = Math.round(oldH + (newH - oldH) * t);
-            listWin.setBounds({ x, y, width, height: h }); // Y fixed → grows downward
-            if (step >= steps) {
-                clearInterval(listWinHeightAnim);
-                listWinHeightAnim = null;
-            }
-        }, INTERVAL);
+        animateListWindowBounds({ x, y, width, height: newH }, 180);
     });
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.LIST_COLLAPSED, (_event, value) => {
         listCollapsed = value;
@@ -628,41 +670,20 @@ function createWindow() {
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.WINDOW_SIZE, (_event, { width, height }) => {
         if (!listWin || listWin.isDestroyed())
             return;
-        const { x, y, width: oldW, height: oldH } = listWin.getBounds();
+        const { width: oldW, height: oldH } = listWin.getBounds();
         const newW = Math.max(38, Math.min(520, width));
         const newH = Math.max(38, height);
         if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2)
             return;
-        if (listWinHeightAnim) {
-            clearInterval(listWinHeightAnim);
-            listWinHeightAnim = null;
-        }
-        // Shrinking to ORB: instant resize — eliminates the macOS panel
-        // background "ghost" that appears during slow window shrink animation
-        if (newW === newH && newW <= 80) {
-            listWin.setBounds({ x, y, width: newW, height: newH });
+        const targetBounds = getCenteredBounds(newW, newH);
+        const duration = newW >= oldW || newH >= oldH ? 320 : 280;
+        if (!listWin.isVisible()) {
+            clearListWindowBoundsAnimation();
+            listWinModeAnimating = false;
+            listWin.setBounds(targetBounds);
             return;
         }
-        const DURATION = 300, INTERVAL = 16;
-        const steps = Math.ceil(DURATION / INTERVAL);
-        let step = 0;
-        const easeOut = (t) => 1 - Math.pow(1 - t, 3);
-        listWinHeightAnim = setInterval(() => {
-            if (!listWin || listWin.isDestroyed()) {
-                clearInterval(listWinHeightAnim);
-                listWinHeightAnim = null;
-                return;
-            }
-            step++;
-            const t = easeOut(Math.min(step / steps, 1));
-            const w = Math.round(oldW + (newW - oldW) * t);
-            const h = Math.round(oldH + (newH - oldH) * t);
-            listWin.setBounds({ x, y, width: w, height: h });
-            if (step >= steps) {
-                clearInterval(listWinHeightAnim);
-                listWinHeightAnim = null;
-            }
-        }, INTERVAL);
+        animateListWindowBounds(targetBounds, duration, { modeTransition: true });
     });
     // ── Renderer ready ──
     listWin.webContents.on("did-finish-load", () => {
@@ -670,8 +691,7 @@ function createWindow() {
         if (dndEnabled)
             listWin.webContents.send(ipc_channels_1.IpcChannels.DND_CHANGE, true);
         listWin.webContents.send(ipc_channels_1.IpcChannels.APPLY_PREFS, { theme, fontSize, orbSize, collapsed: listCollapsed, windowOpacity });
-        // Show after 50ms — by then the renderer has sent reportWindowSize(46,46)
-        // and main has already processed the instant setBounds, so no large-window flash
+        // Show after the renderer has had one beat to snap the hidden window to orb size.
         setTimeout(() => {
             if (listWin && !listWin.isDestroyed())
                 listWin.showInactive();

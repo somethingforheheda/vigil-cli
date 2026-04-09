@@ -90,121 +90,94 @@ function panelHeight() {
 // ═══════════════════════════════════════════════════════
 // Mode transitions (claude-island spring animations)
 // ═══════════════════════════════════════════════════════
+const MODE_TIMINGS = {
+  expand: 320,
+  collapse: 280,
+};
+
+let _modeTransitionTimer = null;
+let _modeTransitionToken = 0;
+
+document.body.dataset.phase = "idle";
+document.body.dataset.content = "hidden";
+
+function _clearModeTransitionTimer() {
+  if (_modeTransitionTimer) {
+    clearTimeout(_modeTransitionTimer);
+    _modeTransitionTimer = null;
+  }
+}
+
+function _isTransitioning() {
+  return document.body.dataset.phase !== "idle";
+}
+
+function _syncPanelHeight() {
+  if (currentMode !== "panel" || _isTransitioning()) return;
+  requestAnimationFrame(() => {
+    if (currentMode !== "panel" || _isTransitioning()) return;
+    window.electronAPI.reportListHeight(panelHeight());
+  });
+}
+
 function setMode(mode) {
   if (currentMode === mode) return;
-  const prev = currentMode;
   currentMode = mode;
 
-  const bodyEl = document.getElementById("cap-body");
   const orbEl  = document.getElementById("orb");
+  const token = ++_modeTransitionToken;
+  _clearModeTransitionTimer();
+  if (orbEl) orbEl.classList.remove("pop-in", "exit-out");
 
   if (mode === "orb") {
-    // panel → orb: collapse body, then pop orb in
-    const finish = () => {
+    // panel → orb: hide content immediately, then shrink the window/shell together.
+    stopSpinner();
+    document.body.dataset.mode = "panel";
+    document.body.dataset.phase = "collapsing";
+    document.body.dataset.content = "hidden";
+    window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
+
+    _modeTransitionTimer = setTimeout(() => {
+      if (token !== _modeTransitionToken) return;
       document.body.dataset.mode = "orb";
-      stopSpinner();
-      window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
-      // Pop-in animation
+      document.body.dataset.phase = "idle";
+      document.body.dataset.content = "hidden";
+      _modeTransitionTimer = null;
       if (orbEl) {
-        orbEl.classList.remove("pop-in", "exit-out");
-        void orbEl.offsetWidth; // force reflow
+        void orbEl.offsetWidth;
         orbEl.classList.add("pop-in");
         orbEl.addEventListener("animationend", () => orbEl.classList.remove("pop-in"), { once: true });
       }
       updateOrb();
-    };
-
-    if (prev === "panel") {
-      _collapseBody(bodyEl, finish);
-    } else {
-      finish();
-    }
+    }, MODE_TIMINGS.collapse);
 
   } else { // panel
-    // orb → panel: orb exits, then panel fades in
+    // orb → panel: orb exits while the shell/window expands from the orb center.
+    document.body.dataset.mode = "panel";
+    document.body.dataset.phase = "expanding";
+    document.body.dataset.content = "hidden";
+    startSpinner();
+    renderRows();
+    updateCapsule();
+    updateOrb();
+    if (orbEl) orbEl.classList.add("exit-out");
 
-    const doExpand = () => {
-      document.body.dataset.mode = "panel";
-      startSpinner();
-      renderRows();
-      updateCapsule();
-      // Expand window to bar height first, then grow body
-      window.electronAPI.reportWindowSize(340, 40);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        _expandBody(bodyEl, () => {
-          reportCardPositions();
-          window.electronAPI.reportWindowSize(340, panelHeight());
-        });
-      }));
-    };
+    requestAnimationFrame(() => {
+      if (token !== _modeTransitionToken) return;
+      document.body.dataset.content = "visible";
+      window.electronAPI.reportWindowSize(340, panelHeight());
+    });
 
-    if (orbEl) {
-      orbEl.classList.remove("pop-in");
-      orbEl.classList.add("exit-out");
-      orbEl.addEventListener("animationend", doExpand, { once: true });
-    } else {
-      doExpand();
-    }
+    _modeTransitionTimer = setTimeout(() => {
+      if (token !== _modeTransitionToken) return;
+      document.body.dataset.phase = "idle";
+      document.body.dataset.content = "visible";
+      _modeTransitionTimer = null;
+      if (orbEl) orbEl.classList.remove("exit-out");
+      reportCardPositions();
+      _syncPanelHeight();
+    }, MODE_TIMINGS.expand);
   }
-}
-
-// Expand body downward — claude-island spring(0.42, 0.8)
-function _expandBody(bodyEl, onDone) {
-  if (!bodyEl) { if (onDone) onDone(); return; }
-  const target = bodyEl.scrollHeight || 200;
-  bodyEl.style.transition = "max-height .42s cubic-bezier(.34,1.25,.64,1)";
-  bodyEl.style.maxHeight = target + "px";
-
-  // Content fade-in: scale(.85→1) + opacity(0→1) after body starts opening
-  const slist = document.getElementById("slist");
-  if (slist) {
-    slist.style.overflowY = "hidden"; // prevent scrollbar during animation
-    slist.style.opacity = "0";
-    slist.style.transform = "scaleY(0.88)";
-    slist.style.transformOrigin = "top";
-    slist.style.transition = "none";
-    setTimeout(() => {
-      slist.style.transition = "opacity .35s cubic-bezier(.25,.46,.45,.94), transform .35s cubic-bezier(.25,.46,.45,.94)";
-      slist.style.opacity = "1";
-      slist.style.transform = "scaleY(1)";
-    }, 60);
-  }
-
-  bodyEl.addEventListener("transitionend", function handler() {
-    bodyEl.removeEventListener("transitionend", handler);
-    bodyEl.style.maxHeight = "none";
-    if (slist) slist.style.overflowY = ""; // restore scrollbar after animation
-    if (onDone) onDone();
-  }, { once: true });
-}
-
-// Collapse body — claude-island spring(0.45, 1.0) no overshoot
-function _collapseBody(bodyEl, onDone) {
-  if (!bodyEl || bodyEl.scrollHeight === 0) { if (onDone) onDone(); return; }
-
-  // Content fades out fast first (0.15s) — claude-island removal transition
-  const slist = document.getElementById("slist");
-  if (slist) {
-    slist.style.transition = "opacity .15s cubic-bezier(.25,.46,.45,.94)";
-    slist.style.opacity = "0";
-  }
-
-  setTimeout(() => {
-    // Then collapse height
-    const cur = bodyEl.scrollHeight;
-    bodyEl.style.maxHeight = cur + "px";
-    bodyEl.style.transition = "none";
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      bodyEl.style.transition = "max-height .45s cubic-bezier(.25,.46,.45,.94)";
-      bodyEl.style.maxHeight = "0";
-      bodyEl.addEventListener("transitionend", function h() {
-        bodyEl.removeEventListener("transitionend", h);
-        // Reset slist styles
-        if (slist) { slist.style.opacity = ""; slist.style.transform = ""; slist.style.transition = ""; }
-        if (onDone) onDone();
-      }, { once: true });
-    }));
-  }, 120);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -419,14 +392,14 @@ function renderRows() {
   }
   idsChanged = false;
 
-  if (currentMode === "panel") {
+  if (currentMode === "panel" && !_isTransitioning()) {
     requestAnimationFrame(() => reportCardPositions());
   }
 }
 
 // ── 1s tick: refresh elapsed ──
 setInterval(() => {
-  if (currentMode === "panel") renderRows();
+  if (currentMode === "panel" && !_isTransitioning()) renderRows();
   else if (currentMode === "orb") updateOrb();
 }, 1000);
 
@@ -448,7 +421,7 @@ window.electronAPI.onSessionsUpdate((s) => {
   } else { // panel
     renderRows();
     updateCapsule();
-    requestAnimationFrame(() => window.electronAPI.reportListHeight(panelHeight()));
+    _syncPanelHeight();
   }
 
   updateOrb(); // Always keep orb display up to date
@@ -461,7 +434,7 @@ window.electronAPI.onCollapseToOrb(() => {
 window.electronAPI.onDndChange((on) => {
   const el = document.getElementById("dnd-bar");
   if (on) el.classList.add("on"); else el.classList.remove("on");
-  if (currentMode === "panel") requestAnimationFrame(() => window.electronAPI.reportListHeight(panelHeight()));
+  _syncPanelHeight();
 });
 
 // Capsule bar double-click: panel → orb
@@ -501,8 +474,6 @@ document.getElementById("orb").addEventListener("dblclick", () => {
   if (!dragging) setMode("panel");
 });
 
-// ── Initial: tell main to resize to ORB ──
-window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
 const FSCALE = { small: 0.85, medium: 1.0, large: 1.2 };
 const ORB_SIZES = {
   small:  { outer: 38, inner: 38 },
