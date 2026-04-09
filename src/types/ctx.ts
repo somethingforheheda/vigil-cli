@@ -152,6 +152,7 @@ export interface MenuContext {
   soundMuted: boolean;
   theme: string;
   fontSize: string;
+  orbSize: string;
   menuOpen: boolean;
   isQuitting: boolean;
   tray: Tray | null;

@@ -66,6 +66,7 @@ let menuOpen = false;
 let _codexMonitor: CodexLogMonitor | null = null;
 let theme = "light";
 let fontSize = "large";
+let orbSize  = "medium";
 let windowOpacity = 1.0;
 let listCollapsed = false;
 let cardPositions: Record<string, { top: number; bottom: number; centerY: number }> | null = null;
@@ -90,7 +91,7 @@ function savePrefs(): void {
   const { x, y } = listWin.getBounds();
   const data: AppPrefs & Record<string, unknown> = {
     x, y, lang, showTray, showDock, autoStartWithClaude,
-    bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize,
+    bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize, orbSize,
     windowOpacity, listCollapsed,
   };
   try { fs.writeFileSync(PREFS_PATH, JSON.stringify(data)); } catch { /* ignore */ }
@@ -286,6 +287,8 @@ const menuCtx: MenuContext = {
   set theme(v: string) { theme = v; },
   get fontSize()      { return fontSize; },
   set fontSize(v: string) { fontSize = v; },
+  get orbSize()       { return orbSize; },
+  set orbSize(v: string)  { orbSize  = v; },
   get menuOpen()      { return menuOpen; },
   set menuOpen(v: boolean) { menuOpen = v; },
   get isQuitting()    { return isQuitting; },
@@ -426,6 +429,7 @@ function createWindow(): void {
   if (prefs && typeof prefs.soundMuted         === "boolean") soundMuted         = prefs.soundMuted;
   if (prefs && typeof prefs.theme              === "string")  theme              = prefs.theme;
   if (prefs && typeof prefs.fontSize           === "string")  fontSize           = prefs.fontSize;
+  if (prefs && typeof prefs.orbSize            === "string")  orbSize            = prefs.orbSize;
   if (prefs && typeof prefs.windowOpacity      === "number")  windowOpacity      = Math.min(1, Math.max(0.1, prefs.windowOpacity));
   if (prefs && typeof prefs.listCollapsed      === "boolean") listCollapsed      = prefs.listCollapsed;
 
@@ -449,16 +453,19 @@ function createWindow(): void {
     y: startY,
     frame: false,
     transparent: true,
+    backgroundColor: "#00000000",
     alwaysOnTop: true,
-    resizable: true,
-    minWidth:  52,
+    // Transparent macOS windows can pick up a native backing surface when
+    // treated as resizeable panels, which shows up as the gray/white "drag bar".
+    resizable: false,
+    minWidth:  38,
     maxWidth:  520,
-    minHeight: 30,
+    minHeight: 38,
     skipTaskbar: true,
     hasShadow: false,
     fullscreenable: false,
+    show: false,
     ...(isLinux ? { type: "toolbar" as const } : {}),
-    ...(isMac   ? { type: "panel" as const, roundedCorners: true } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload-list.js"),
       backgroundThrottling: false,
@@ -469,7 +476,6 @@ function createWindow(): void {
   if (isWin) listWin.setAlwaysOnTop(true, TOPMOST_LEVEL_WIN);
   listWin.loadFile(path.join(__dirname, "list.html"));
   if (windowOpacity < 1) listWin.setOpacity(windowOpacity);
-  listWin.showInactive();
   if (isLinux) listWin.setSkipTaskbar(true);
   reapplyMacVisibility();
 
@@ -554,14 +560,20 @@ function createWindow(): void {
     else savePrefs();
   });
 
-  // ── Mode switch: resize window for ORB/PEEK/PANEL ──
+  // ── Mode switch: resize window for ORB/PANEL ──
   ipcMain.on(IpcChannels.WINDOW_SIZE, (_event, { width, height }: { width: number; height: number }) => {
     if (!listWin || listWin.isDestroyed()) return;
     const { x, y, width: oldW, height: oldH } = listWin.getBounds();
-    const newW = Math.max(52, Math.min(520, width));
-    const newH = Math.max(40, height);
+    const newW = Math.max(38, Math.min(520, width));
+    const newH = Math.max(38, height);
     if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2) return;
     if (listWinHeightAnim) { clearInterval(listWinHeightAnim); listWinHeightAnim = null; }
+    // Shrinking to ORB: instant resize — eliminates the macOS panel
+    // background "ghost" that appears during slow window shrink animation
+    if (newW === newH && newW <= 80) {
+      listWin.setBounds({ x, y, width: newW, height: newH });
+      return;
+    }
     const DURATION = 300, INTERVAL = 16;
     const steps = Math.ceil(DURATION / INTERVAL);
     let step = 0;
@@ -581,7 +593,12 @@ function createWindow(): void {
   listWin.webContents.on("did-finish-load", () => {
     sendSessionsUpdate();
     if (dndEnabled) listWin!.webContents.send(IpcChannels.DND_CHANGE, true);
-    listWin!.webContents.send(IpcChannels.APPLY_PREFS, { theme, fontSize, collapsed: listCollapsed, windowOpacity });
+    listWin!.webContents.send(IpcChannels.APPLY_PREFS, { theme, fontSize, orbSize, collapsed: listCollapsed, windowOpacity });
+    // Show after 50ms — by then the renderer has sent reportWindowSize(46,46)
+    // and main has already processed the instant setBounds, so no large-window flash
+    setTimeout(() => {
+      if (listWin && !listWin.isDestroyed()) listWin.showInactive();
+    }, 50);
     // Startup recovery: if no hook arrived yet, detect running agent processes
     if (sessions.size === 0 && !dndEnabled) {
       setTimeout(() => {

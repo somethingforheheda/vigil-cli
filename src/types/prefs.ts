@@ -13,6 +13,7 @@ export interface AppPrefs {
   soundMuted?: boolean;
   theme?: string;
   fontSize?: string;
+  orbSize?: string;
   windowOpacity?: number;
   listCollapsed?: boolean;
 }

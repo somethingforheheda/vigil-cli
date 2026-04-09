@@ -31,10 +31,12 @@ let idsChanged = false; // flag so we only animate new rows on fresh updates
 
 // ── Mode machine ──
 let currentMode = "orb";
-let peekTimer = null;   // 8s auto-return peek→orb
 document.body.dataset.mode = "orb";
 
-// ── Drag ──
+// ── Orb size (outer window dimension, updated by applyPrefs) ──
+let _orbOuter = 46;
+
+// ── Drag state ──
 let dragging = false, dragX = 0, dragY = 0;
 
 // ═══════════════════════════════════════════════════════
@@ -93,70 +95,56 @@ function setMode(mode) {
   const prev = currentMode;
   currentMode = mode;
 
-  const capEl  = document.getElementById("cap");
   const bodyEl = document.getElementById("cap-body");
+  const orbEl  = document.getElementById("orb");
 
   if (mode === "orb") {
-    clearTimeout(peekTimer); peekTimer = null;
-    stopSpinner();
-
-    if (prev === "panel") {
-      // Panel → ORB: content fades out fast, then capsule collapses
-      _collapseBody(bodyEl, () => {
-        if (capEl) capEl.classList.remove("panel");
-        document.body.dataset.mode = "orb";
-        window.electronAPI.reportWindowSize(52, 52);
-      });
-    } else {
-      // Peek → ORB
+    // panel → orb: collapse body, then pop orb in
+    const finish = () => {
       document.body.dataset.mode = "orb";
-      window.electronAPI.reportWindowSize(52, 52);
-    }
-
-  } else if (mode === "peek") {
-    clearTimeout(peekTimer); peekTimer = null;
+      stopSpinner();
+      window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
+      // Pop-in animation
+      if (orbEl) {
+        orbEl.classList.remove("pop-in", "exit-out");
+        void orbEl.offsetWidth; // force reflow
+        orbEl.classList.add("pop-in");
+        orbEl.addEventListener("animationend", () => orbEl.classList.remove("pop-in"), { once: true });
+      }
+      updateOrb();
+    };
 
     if (prev === "panel") {
-      // Panel → Peek: collapse body first, then narrow capsule
-      _collapseBody(bodyEl, () => {
-        if (capEl) capEl.classList.remove("panel");
-        document.body.dataset.mode = "peek";
-        if (userWidth) capEl.style.width = userWidth + "px";
-        window.electronAPI.reportWindowSize(capWidth(), 40);
-        updateCapsule();
-        startSpinner();
-        resetPeekTimer();
-      });
+      _collapseBody(bodyEl, finish);
     } else {
-      // ORB → Peek
-      document.body.dataset.mode = "peek";
-      if (userWidth) capEl.style.width = userWidth + "px";
-      updateCapsule();
-      startSpinner();
-      window.electronAPI.reportWindowSize(capWidth(), 40);
-      resetPeekTimer();
+      finish();
     }
 
   } else { // panel
-    clearTimeout(peekTimer); peekTimer = null;
+    // orb → panel: orb exits, then panel fades in
 
-    // Peek → Panel: widen capsule + grow body downward
-    document.body.dataset.mode = "panel";
-    if (capEl) capEl.classList.add("panel");
-    if (userWidth) capEl.style.width = userWidth + "px";
-    startSpinner();
+    const doExpand = () => {
+      document.body.dataset.mode = "panel";
+      startSpinner();
+      renderRows();
+      updateCapsule();
+      // Expand window to bar height first, then grow body
+      window.electronAPI.reportWindowSize(340, 40);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        _expandBody(bodyEl, () => {
+          reportCardPositions();
+          window.electronAPI.reportWindowSize(340, panelHeight());
+        });
+      }));
+    };
 
-    // Render content first (invisible, height 0)
-    renderRows();
-    updateCapsule();
-
-    // Then animate open (nextTick so CSS transition picks up)
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      _expandBody(bodyEl, () => {
-        reportCardPositions();
-        window.electronAPI.reportWindowSize(capWidth(), panelHeight());
-      });
-    }));
+    if (orbEl) {
+      orbEl.classList.remove("pop-in");
+      orbEl.classList.add("exit-out");
+      orbEl.addEventListener("animationend", doExpand, { once: true });
+    } else {
+      doExpand();
+    }
   }
 }
 
@@ -168,9 +156,9 @@ function _expandBody(bodyEl, onDone) {
   bodyEl.style.maxHeight = target + "px";
 
   // Content fade-in: scale(.85→1) + opacity(0→1) after body starts opening
-  // claude-island: .scale(0.8, anchor:.top).combined(.opacity) .smooth(0.35)
   const slist = document.getElementById("slist");
   if (slist) {
+    slist.style.overflowY = "hidden"; // prevent scrollbar during animation
     slist.style.opacity = "0";
     slist.style.transform = "scaleY(0.88)";
     slist.style.transformOrigin = "top";
@@ -179,12 +167,13 @@ function _expandBody(bodyEl, onDone) {
       slist.style.transition = "opacity .35s cubic-bezier(.25,.46,.45,.94), transform .35s cubic-bezier(.25,.46,.45,.94)";
       slist.style.opacity = "1";
       slist.style.transform = "scaleY(1)";
-    }, 60); // slight delay so body starts opening first
+    }, 60);
   }
 
   bodyEl.addEventListener("transitionend", function handler() {
     bodyEl.removeEventListener("transitionend", handler);
     bodyEl.style.maxHeight = "none";
+    if (slist) slist.style.overflowY = ""; // restore scrollbar after animation
     if (onDone) onDone();
   }, { once: true });
 }
@@ -218,35 +207,82 @@ function _collapseBody(bodyEl, onDone) {
   }, 120);
 }
 
-function resetPeekTimer() {
-  clearTimeout(peekTimer);
-  const vis = sessions.filter(s => !s.headless);
-  if (vis.every(s => s.state === "idle" || s.state === "sleeping")) {
-    peekTimer = setTimeout(() => { peekTimer = null; setMode("orb"); }, 8000);
-  }
-}
-
 // ═══════════════════════════════════════════════════════
 // ORB dots update
 // ═══════════════════════════════════════════════════════
+let _lastOrbStateClass = "";
+
 function updateOrb() {
-  const orb  = document.getElementById("orb");
-  const dots = document.getElementById("orb-dots");
+  const orb      = document.getElementById("orb");
+  const statusEl = document.getElementById("orb-status");
+  const nameEl   = document.getElementById("orb-name");
+  const dots     = document.getElementById("orb-dots");
   if (!orb || !dots) return;
+
   const vis = sessions.filter(s => !s.headless);
+  const sorted = [...vis].sort((a,b) => (PRIO[b.state]||0) - (PRIO[a.state]||0));
+  const top = sorted[0];
+
   const hasErr  = vis.some(s => s.state === "error");
   const hasPerm = vis.some(s => s.state === "notification");
   const hasAct  = vis.some(s => ["working","thinking","juggling"].includes(s.state));
-  orb.className = "orb" + (hasErr ? " s-err" : hasPerm ? " s-perm" : hasAct ? " s-active" : "");
+
+  // Breathing animation class
+  const stateClass = hasErr ? " s-err" : hasPerm ? " s-perm" : hasAct ? " s-active" : "";
+  if (stateClass !== _lastOrbStateClass) {
+    _lastOrbStateClass = stateClass;
+    // Pulse when state changes (skip initial)
+    if (_lastOrbStateClass !== "" || stateClass !== "") {
+      orb.classList.add("state-pulse");
+      orb.addEventListener("animationend", () => orb.classList.remove("state-pulse"), { once: true });
+    }
+  }
+  // Preserve pop-in/exit-out/state-pulse classes
+  const keep = ["pop-in","exit-out","state-pulse"].filter(c => orb.classList.contains(c));
+  orb.className = "orb" + stateClass;
+  for (const c of keep) orb.classList.add(c);
+
+  // Status symbol (top of orb)
+  if (statusEl) {
+    if (top) {
+      const isActive = ["working","thinking","juggling"].includes(top.state);
+      const isPerm   = top.state === "notification";
+      const isErr    = top.state === "error";
+      const isDone   = top.state === "attention";
+      if (isActive) {
+        statusEl.innerHTML = `<span class="spin" style="color:var(--orange);font-size:13px">${SPIN[_spinIdx]}</span>`;
+        statusEl.style.cssText = "";
+      } else {
+        const bg = isPerm ? "var(--amber)" : isErr ? "var(--red)" : isDone ? "var(--green)" : "rgba(255,255,255,0.28)";
+        statusEl.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${bg}"></span>`;
+        statusEl.style.cssText = "";
+      }
+    } else {
+      statusEl.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.15)"></span>`;
+      statusEl.style.cssText = "";
+    }
+  }
+
+  // Agent name
+  if (nameEl) {
+    nameEl.textContent = top ? (top.agentId || "VC").slice(0, 6) : "VC";
+  }
+
+  // Session dots (max 5)
   dots.innerHTML = vis.slice(0, 5).map(s => {
     const c = s.state === "error" ? " err" : s.state === "notification" ? " perm"
       : ["working","thinking","juggling"].includes(s.state) ? " active" : "";
     return `<span class="orb-dot${c}"></span>`;
   }).join("") + (vis.length > 5 ? `<span style="font-size:8px;color:#555">+${vis.length - 5}</span>` : "");
+
+  // Spinner management when in orb mode
+  if (currentMode === "orb") {
+    if (hasAct) startSpinner(); else stopSpinner();
+  }
 }
 
 // ═══════════════════════════════════════════════════════
-// Capsule bar update (PEEK / PANEL top indicator)
+// Capsule bar update (PANEL top indicator — "VigilCLI" + session dots)
 // ═══════════════════════════════════════════════════════
 function updateCapsule() {
   const indEl   = document.getElementById("cap-ind");
@@ -258,84 +294,27 @@ function updateCapsule() {
 
   const vis = sessions.filter(s => !s.headless);
 
-  // ── PANEL mode: minimal header — just session state dots on the right ──
-  if (currentMode === "panel") {
-    indEl.innerHTML = "";
-    agentEl.style.cssText = "color:var(--t25)";
-    agentEl.textContent = "VigilCLI";
-    lineEl.className = "";
-    statEl.textContent = "";
-    statEl.removeAttribute("style");
+  // Minimal header: "VigilCLI" + colored session dots on the right
+  indEl.innerHTML = "";
+  agentEl.style.cssText = "color:var(--t25)";
+  agentEl.textContent = "VigilCLI";
+  lineEl.className = "";
+  statEl.textContent = "";
+  statEl.removeAttribute("style");
 
-    // Dots: one per session, colored by state (max 8, then +N)
-    const dotColor = s => {
-      if (["working","thinking","juggling"].includes(s.state)) return "var(--orange)";
-      if (s.state === "notification") return "var(--amber)";
-      if (s.state === "error")        return "var(--red)";
-      if (s.state === "attention")    return "var(--green)";
-      return "rgba(255,255,255,0.18)";
-    };
-    const shown = vis.slice(0, 8);
-    const extra = vis.length > 8 ? `<span style="font-size:9px;color:var(--t25);margin-left:1px">+${vis.length - 8}</span>` : "";
-    toolEl.style.cssText = "display:flex;align-items:center;gap:5px;max-width:none;font-family:inherit";
-    toolEl.innerHTML = shown.map(s =>
-      `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor(s)};flex-shrink:0"></span>`
-    ).join("") + extra;
-    return;
-  }
-
-  // ── PEEK mode: show most active session info ──
-  agentEl.removeAttribute("style");
-  toolEl.style.cssText = "";
-
-  if (!vis.length) {
-    indEl.innerHTML = `<span class="ind-dot"></span>`;
-    agentEl.textContent = "VigilCLI";
-    lineEl.className = "";
-    toolEl.textContent = "";
-    statEl.textContent = "";
-    statEl.removeAttribute("style");
-    return;
-  }
-
-  const top = [...vis].sort((a,b) => (PRIO[b.state]||0) - (PRIO[a.state]||0))[0];
-  const isActive = ["working","thinking","juggling"].includes(top.state);
-  const isPerm   = top.state === "notification";
-  const isErr    = top.state === "error";
-  const isDone   = top.state === "attention";
-
-  if (isActive) {
-    indEl.innerHTML = `<span class="spin" style="color:var(--orange)">${SPIN[_spinIdx]}</span>`;
-  } else if (isPerm) {
-    indEl.innerHTML = `<span class="ind-dot a"></span>`;
-  } else if (isErr) {
-    indEl.innerHTML = `<span class="ind-dot r"></span>`;
-  } else if (isDone) {
-    indEl.innerHTML = `<span class="ind-dot g"></span>`;
-  } else {
-    indEl.innerHTML = `<span class="ind-dot"></span>`;
-  }
-
-  agentEl.textContent = top.agentId || "claude";
-  if (top.title) {
-    agentEl.innerHTML = `${esc(top.agentId || "claude")} <span style="color:var(--t50);font-weight:400">${esc(top.title)}</span>`;
-  }
-  lineEl.className = isActive ? "running" : "";
-  toolEl.textContent = (isActive && top.currentTool) ? top.currentTool : "";
-
-  if (isPerm) {
-    statEl.textContent = "permission";
-    statEl.style.cssText = "color:var(--amber);background:rgba(255,178,0,.1)";
-  } else if (isErr) {
-    statEl.textContent = "error";
-    statEl.style.cssText = "color:var(--red);background:rgba(255,77,77,.1)";
-  } else if (isActive) {
-    statEl.textContent = top.state;
-    statEl.style.cssText = "color:var(--orange);background:rgba(217,120,87,.1)";
-  } else {
-    statEl.textContent = "";
-    statEl.removeAttribute("style");
-  }
+  const dotColor = s => {
+    if (["working","thinking","juggling"].includes(s.state)) return "var(--orange)";
+    if (s.state === "notification") return "var(--amber)";
+    if (s.state === "error")        return "var(--red)";
+    if (s.state === "attention")    return "var(--green)";
+    return "rgba(255,255,255,0.18)";
+  };
+  const shown = vis.slice(0, 8);
+  const extra = vis.length > 8 ? `<span style="font-size:9px;color:var(--t25);margin-left:1px">+${vis.length - 8}</span>` : "";
+  toolEl.style.cssText = "display:flex;align-items:center;gap:5px;max-width:none;font-family:inherit";
+  toolEl.innerHTML = shown.map(s =>
+    `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dotColor(s)};flex-shrink:0"></span>`
+  ).join("") + extra;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -447,7 +426,7 @@ function renderRows() {
 // ── 1s tick: refresh elapsed ──
 setInterval(() => {
   if (currentMode === "panel") renderRows();
-  else if (currentMode === "peek") updateCapsule();
+  else if (currentMode === "orb") updateOrb();
 }, 1000);
 
 // ═══════════════════════════════════════════════════════
@@ -464,18 +443,14 @@ window.electronAPI.onSessionsUpdate((s) => {
   }
 
   if (currentMode === "orb") {
-    setMode("peek");
-  } else if (currentMode === "peek") {
-    updateCapsule();
-    resetPeekTimer();
-  } else {
+    updateOrb(); // Stay in orb, show updated state
+  } else { // panel
     renderRows();
     updateCapsule();
-    // Resize if height changed
     requestAnimationFrame(() => window.electronAPI.reportListHeight(panelHeight()));
   }
 
-  updateOrb();
+  updateOrb(); // Always keep orb display up to date
 });
 
 window.electronAPI.onCollapseToOrb(() => {
@@ -488,17 +463,60 @@ window.electronAPI.onDndChange((on) => {
   if (currentMode === "panel") requestAnimationFrame(() => window.electronAPI.reportListHeight(panelHeight()));
 });
 
-// Capsule bar click: peek ↔ panel
-document.getElementById("cap-bar").addEventListener("click", (e) => {
-  if (dragging) return;
-  if (currentMode === "peek")  setMode("panel");
-  else if (currentMode === "panel") setMode("peek");
+// Capsule bar double-click: panel → orb
+document.getElementById("cap-bar").addEventListener("dblclick", (e) => {
+  e.preventDefault();
+  if (!dragging && currentMode === "panel") setMode("orb");
 });
 
-// Apply prefs (theme/fontSize)
+// ═══════════════════════════════════════════════════════
+// Drag — #orb (circle, no corner gaps) and panel cap-bar
+// ═══════════════════════════════════════════════════════
+function onDragStart(e) {
+  if (e.button !== 0) return;
+  dragging = false; dragX = e.screenX; dragY = e.screenY;
+}
+document.getElementById("orb").addEventListener("mousedown", onDragStart);
+document.getElementById("cap-bar").addEventListener("mousedown", (e) => {
+  if (currentMode !== "panel") return;
+  onDragStart(e);
+});
+document.addEventListener("mousemove", (e) => {
+  if (!dragX && !dragY) return;
+  const dx = e.screenX - dragX, dy = e.screenY - dragY;
+  if (dx || dy) {
+    dragging = true; dragX = e.screenX; dragY = e.screenY;
+    window.electronAPI.dragWindow(dx, dy);
+  }
+});
+document.addEventListener("mouseup", () => {
+  const was = dragging;
+  dragging = false; dragX = 0; dragY = 0;
+  if (was) window.electronAPI.snapToEdge(window.screenX, window.screenY);
+});
+
+// ── ORB double-click → panel ──
+document.getElementById("orb").addEventListener("dblclick", () => {
+  if (!dragging) setMode("panel");
+});
+
+// ── Initial: tell main to resize to ORB ──
+window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
 const FSCALE = { small: 0.85, medium: 1.0, large: 1.2 };
-window.electronAPI.onApplyPrefs(({ fontSize }) => {
+const ORB_SIZES = {
+  small:  { outer: 38, inner: 38 },
+  medium: { outer: 46, inner: 46 },
+  large:  { outer: 58, inner: 58 },
+};
+window.electronAPI.onApplyPrefs(({ fontSize, orbSize }) => {
   if (fontSize) document.documentElement.style.setProperty("--font-scale", FSCALE[fontSize] ?? 1.0);
+  if (orbSize) {
+    const s = ORB_SIZES[orbSize] || ORB_SIZES.medium;
+    _orbOuter = s.outer;
+    document.documentElement.style.setProperty("--orb-outer", s.outer + "px");
+    document.documentElement.style.setProperty("--orb-inner", s.inner + "px");
+    if (currentMode === "orb") window.electronAPI.reportWindowSize(s.outer, s.outer);
+  }
 });
 
 // ── Sound (Web Audio) ──
@@ -526,95 +544,5 @@ window.electronAPI.onPlaySound((name) => {
   } catch {}
 });
 
-// ═══════════════════════════════════════════════════════
-// Drag (manual — no webkit-app-region)
-// ═══════════════════════════════════════════════════════
-function onDragStart(e) {
-  if (e.button !== 0) return;
-  dragging = false; dragX = e.screenX; dragY = e.screenY;
-}
-document.getElementById("orb-container").addEventListener("mousedown", onDragStart);
-document.getElementById("cap-bar").addEventListener("mousedown", (e) => {
-  // In panel mode the bar has webkit-app-region:drag, native drag takes over.
-  // In peek mode we do manual drag.
-  if (currentMode !== "peek") return;
-  onDragStart(e);
-});
-document.addEventListener("mousemove", (e) => {
-  if (!dragX && !dragY) return;
-  const dx = e.screenX - dragX, dy = e.screenY - dragY;
-  if (dx || dy) {
-    dragging = true; dragX = e.screenX; dragY = e.screenY;
-    window.electronAPI.dragWindow(dx, dy);
-  }
-});
-document.addEventListener("mouseup", () => {
-  const was = dragging;
-  dragging = false; dragX = 0; dragY = 0;
-  if (was) window.electronAPI.snapToEdge(window.screenX, window.screenY);
-});
-
-// ── ORB click → peek ──
-document.getElementById("orb-container").addEventListener("click", () => {
-  if (!dragging) setMode("peek");
-});
-
-// ═══════════════════════════════════════════════════════
-// Resize capsule width by dragging right edge
-// ═══════════════════════════════════════════════════════
-let userWidth = null;       // user-set override (null = use default 300/340)
-let isResizing = false;
-const CAP_MIN_W = 220, CAP_MAX_W = 520, RESIZE_ZONE = 8;
-
-function capWidth()   { return userWidth || (currentMode === "panel" ? 340 : 300); }
-function capHeight()  { return currentMode === "panel" ? panelHeight() : 40; }
-
-const capEl = document.getElementById("cap");
-
-// Change cursor when hovering near right edge
-capEl.addEventListener("mousemove", (e) => {
-  if (isResizing || dragging) return;
-  const rect = capEl.getBoundingClientRect();
-  capEl.style.cursor = e.clientX >= rect.right - RESIZE_ZONE ? "ew-resize" : "";
-});
-capEl.addEventListener("mouseleave", () => {
-  if (!isResizing) capEl.style.cursor = "";
-});
-
-// Start resize on mousedown near right edge
-capEl.addEventListener("mousedown", (e) => {
-  if (e.button !== 0) return;
-  const rect = capEl.getBoundingClientRect();
-  if (e.clientX < rect.right - RESIZE_ZONE) return;
-
-  e.preventDefault();
-  e.stopPropagation();
-  isResizing = true;
-
-  const startX = e.clientX;
-  const startW = rect.width;
-
-  // Suspend width transition so resize feels instant / snappy
-  capEl.style.transition = "border-radius .35s cubic-bezier(.34,1.25,.64,1)";
-
-  function onMove(ev) {
-    const newW = Math.max(CAP_MIN_W, Math.min(CAP_MAX_W, startW + (ev.clientX - startX)));
-    userWidth = newW;
-    capEl.style.width = newW + "px";
-    window.electronAPI.reportWindowSize(newW, capHeight());
-  }
-
-  function onUp() {
-    isResizing = false;
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-    capEl.style.transition = "";  // restore CSS transition
-    capEl.style.cursor = "";
-  }
-
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-});
-
 // ── Initial: tell main to resize to ORB ──
-window.electronAPI.reportWindowSize(52, 52);
+window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);

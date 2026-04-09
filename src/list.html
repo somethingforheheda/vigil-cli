@@ -23,8 +23,11 @@
       --green:       #66BF73;
       --red:         #FF4D4D;
       --font-scale:  1.0;
+      --orb-outer:   46px;
+      --orb-inner:   46px;
     }
 
+    html { background: transparent; overflow: hidden; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       font-size: calc(13px * var(--font-scale));
@@ -38,24 +41,35 @@
        ORB — 52×52 breathing sphere
        ═══════════════════════════════════ */
     #orb-container {
-      width: 52px; height: 52px;
+      width: var(--orb-outer); height: var(--orb-outer);
       display: none;
       align-items: center; justify-content: center;
-      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
     }
-    #orb-container:active { cursor: grabbing; }
     body[data-mode="orb"] #orb-container { display: flex; }
 
     .orb {
-      width: 46px; height: 46px;
+      width: var(--orb-inner); height: var(--orb-inner);
       border-radius: 50%;
       background: radial-gradient(circle at 35% 35%, #1c1c1c, #000);
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      gap: 3px;
+      gap: 2px;
+      cursor: grab;
       animation: orbBreath 3s ease-in-out infinite;
     }
-    .orb-icon { font-size: 9px; font-weight: 700; color: var(--orange); letter-spacing: .06em; }
+    .orb:active { cursor: grabbing; }
+    .orb-status {
+      font-size: 14px; font-weight: 500;
+      color: var(--t40); line-height: 1;
+      min-height: 16px; display: flex; align-items: center; justify-content: center;
+    }
+    .orb-name {
+      font-size: 8px; font-weight: 600;
+      color: var(--t50); letter-spacing: .05em;
+      text-transform: uppercase; line-height: 1;
+    }
     .orb-dots { display: flex; gap: 2px; align-items: center; }
     .orb-dot  { width: 3px; height: 3px; border-radius: 50%; background: rgba(255,255,255,0.18); }
     .orb-dot.active { background: var(--orange); }
@@ -63,23 +77,51 @@
     .orb-dot.err    { background: var(--red); }
 
     @keyframes orbBreath {
-      0%,100% { box-shadow: 0 0 8px rgba(217,120,87,.1); transform: scale(1); }
-      50%     { box-shadow: 0 0 18px rgba(217,120,87,.35); transform: scale(1.04); }
+      0%,100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
+      50%     { box-shadow: 0 0 18px rgba(217,120,87,.35); }
     }
     .orb.s-active { animation: orbBreathActive 1.2s ease-in-out infinite; }
     .orb.s-perm   { animation: orbBreathPerm   0.8s ease-in-out infinite; }
     .orb.s-err    { animation: orbBreathErr    0.6s ease-in-out infinite; }
     @keyframes orbBreathActive {
-      0%,100% { box-shadow: 0 0 8px rgba(217,120,87,.1); transform: scale(1); }
-      50%     { box-shadow: 0 0 22px rgba(217,120,87,.45); transform: scale(1.05); }
+      0%,100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
+      50%     { box-shadow: 0 0 22px rgba(217,120,87,.45); }
     }
     @keyframes orbBreathPerm {
-      0%,100% { box-shadow: 0 0 8px rgba(255,178,0,.1); transform: scale(1); }
-      50%     { box-shadow: 0 0 22px rgba(255,178,0,.5); transform: scale(1.05); }
+      0%,100% { box-shadow: 0 0 8px rgba(255,178,0,.1); }
+      50%     { box-shadow: 0 0 22px rgba(255,178,0,.5); }
     }
     @keyframes orbBreathErr {
-      0%,100% { box-shadow: 0 0 8px rgba(255,77,77,.1); transform: scale(1); }
-      50%     { box-shadow: 0 0 22px rgba(255,77,77,.5); transform: scale(1.05); }
+      0%,100% { box-shadow: 0 0 8px rgba(255,77,77,.1); }
+      50%     { box-shadow: 0 0 22px rgba(255,77,77,.5); }
+    }
+
+    /* ── ORB transition animations ── */
+    @keyframes orbPopIn {
+      0%   { transform: scale(0.4); opacity: 0; }
+      60%  { transform: scale(1);   opacity: 1; }
+      100% { transform: scale(1);   opacity: 1; }
+    }
+    @keyframes orbExitOut {
+      from { transform: scale(1);   opacity: 1; }
+      to   { transform: scale(0.65); opacity: 0; }
+    }
+    @keyframes orbStatePulse {
+      0%   { box-shadow: 0 0 0 rgba(217,120,87,.0); }
+      40%  { box-shadow: 0 0 18px rgba(217,120,87,.6); }
+      100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
+    }
+    .orb.pop-in   { animation: orbPopIn   .4s cubic-bezier(.34,1.36,.64,1) both; }
+    .orb.exit-out { animation: orbExitOut .15s ease-in both; }
+    .orb.state-pulse { animation: orbStatePulse .4s ease-out; }
+
+    /* ── Panel fade-in ── */
+    @keyframes capFadeIn {
+      from { opacity: 0; transform: scale(0.97); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    body[data-mode="panel"] #cap {
+      animation: capFadeIn .2s cubic-bezier(.25,.46,.45,.94) both;
     }
 
     /* ═══════════════════════════════════
@@ -98,7 +140,6 @@
                   border-radius .35s cubic-bezier(.34,1.25,.64,1);
       will-change: width, border-radius;
     }
-    body[data-mode="peek"]  #cap { display: flex; }
     body[data-mode="panel"] #cap { display: flex; width: 340px; border-radius: 14px; }
 
     /* ── Capsule bar (always visible) ── */
@@ -111,8 +152,9 @@
     }
     body[data-mode="panel"] #cap-bar {
       border-bottom: 1px solid var(--sep);
-      -webkit-app-region: drag;
+      cursor: grab;
     }
+    body[data-mode="panel"] #cap-bar:active { cursor: grabbing; }
 
     #cap-ind {
       width: 14px; flex-shrink: 0;
@@ -162,7 +204,6 @@
       background: rgba(255,255,255,.07); color: var(--t50);
       white-space: nowrap; flex-shrink: 0;
     }
-    #cap-menu:hover { background: var(--hover); color: var(--t70); }
 
     /* ── Panel content (grows downward) ── */
     #cap-body {
@@ -255,8 +296,9 @@
   <!-- ORB mode: 52×52 -->
   <div id="orb-container">
     <div class="orb" id="orb">
-      <span class="orb-icon">VC</span>
-      <div class="orb-dots" id="orb-dots"></div>
+      <div class="orb-status" id="orb-status">·</div>
+      <div class="orb-name"   id="orb-name">VC</div>
+      <div class="orb-dots"   id="orb-dots"></div>
     </div>
   </div>
 

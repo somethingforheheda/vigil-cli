@@ -137,6 +137,10 @@ const i18n = {
         textSizeSmall: "Small",
         textSizeMedium: "Medium",
         textSizeLarge: "Large",
+        orbSize: "Orb Size",
+        orbSizeSmall: "Small (44px)",
+        orbSizeMedium: "Medium (52px)",
+        orbSizeLarge: "Large (64px)",
     },
     zh: {
         sleep: "休眠（免打扰）",
@@ -189,6 +193,10 @@ const i18n = {
         textSizeSmall: "小",
         textSizeMedium: "中",
         textSizeLarge: "大",
+        orbSize: "小球大小",
+        orbSizeSmall: "小 (44px)",
+        orbSizeMedium: "中 (52px)",
+        orbSizeLarge: "大 (64px)",
     },
 };
 function initMenu(ctx) {
@@ -370,6 +378,13 @@ function initMenu(ctx) {
                 { label: t("textSizeLarge"), type: "radio", checked: ctx.fontSize === "large", click: () => setFontSize("large") },
             ],
         }, {
+            label: t("orbSize"),
+            submenu: [
+                { label: t("orbSizeSmall"), type: "radio", checked: ctx.orbSize === "small", click: () => setOrbSize("small") },
+                { label: t("orbSizeMedium"), type: "radio", checked: ctx.orbSize === "medium", click: () => setOrbSize("medium") },
+                { label: t("orbSizeLarge"), type: "radio", checked: ctx.orbSize === "large", click: () => setOrbSize("large") },
+            ],
+        }, {
             label: t("language"),
             submenu: [
                 { label: "English", type: "radio", checked: ctx.lang === "en", click: () => setLanguage("en") },
@@ -475,7 +490,7 @@ function initMenu(ctx) {
     function sendPrefsToRenderer() {
         const win = ctx.win;
         if (win && !win.isDestroyed())
-            win.webContents.send("apply-prefs", { theme: ctx.theme, fontSize: ctx.fontSize });
+            win.webContents.send("apply-prefs", { theme: ctx.theme, fontSize: ctx.fontSize, orbSize: ctx.orbSize });
     }
     function setTheme(newTheme) {
         ctx.theme = newTheme;
@@ -485,6 +500,12 @@ function initMenu(ctx) {
     }
     function setFontSize(newSize) {
         ctx.fontSize = newSize;
+        sendPrefsToRenderer();
+        rebuildAllMenus();
+        ctx.savePrefs();
+    }
+    function setOrbSize(newSize) {
+        ctx.orbSize = newSize;
         sendPrefsToRenderer();
         rebuildAllMenus();
         ctx.savePrefs();
