@@ -189,7 +189,12 @@ function initState(ctx) {
                     if (changed)
                         sendSessionsUpdate();
                 }
-                commitState(pickDisplayState());
+                const next = pickDisplayState();
+                // If we're still in the same ONESHOT state (e.g., permission still pending),
+                // silently stay without re-triggering sound or cascading loops.
+                if (next === state && states_1.ONESHOT_STATES.has(state))
+                    return;
+                commitState(next);
             }, returnMs);
         }
         else {
@@ -314,7 +319,10 @@ function initState(ctx) {
             return;
         }
         else if (state === "attention" || state === "notification") {
-            store.set(sessionId, { state: "idle", updatedAt: Date.now(), displaySvg: null, ...base });
+            // Preserve existing "notification" if a PermissionRequest is already pending —
+            // a concurrent Notification hook must not clear the permission-wait state.
+            const keepNotification = state === "notification" && existing?.state === "notification";
+            store.set(sessionId, { state: keepNotification ? "notification" : "idle", updatedAt: Date.now(), displaySvg: null, ...base });
         }
         else if (states_1.ONESHOT_STATES.has(state)) {
             if (existing) {

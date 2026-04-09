@@ -101,9 +101,9 @@ const i18n = {
     textSizeMedium: "Medium",
     textSizeLarge: "Large",
     orbSize: "Orb Size",
-    orbSizeSmall: "Small (44px)",
-    orbSizeMedium: "Medium (52px)",
-    orbSizeLarge: "Large (64px)",
+    orbSizeSmall: "Small (58px)",
+    orbSizeMedium: "Medium (72px)",
+    orbSizeLarge: "Large (88px)",
   },
   zh: {
     sleep: "休眠（免打扰）",
@@ -156,9 +156,9 @@ const i18n = {
     textSizeMedium: "中",
     textSizeLarge: "大",
     orbSize: "小球大小",
-    orbSizeSmall: "小 (44px)",
-    orbSizeMedium: "中 (52px)",
-    orbSizeLarge: "大 (64px)",
+    orbSizeSmall: "小 (58px)",
+    orbSizeMedium: "中 (72px)",
+    orbSizeLarge: "大 (88px)",
   },
 } as const;
 

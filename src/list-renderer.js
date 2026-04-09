@@ -241,6 +241,15 @@ function updateOrb() {
   if (nameEl) {
     const STATE_LABEL = { notification: "perm", attention: "done", juggling: "busy" };
     nameEl.textContent = top ? (STATE_LABEL[top.state] || top.state || "idle") : "idle";
+    const isActiveTop = top && ["working","thinking","juggling"].includes(top.state);
+    const labelColor = !top ? "var(--t50)"
+      : top.state === "notification" ? "var(--amber)"
+      : top.state === "error"        ? "var(--red)"
+      : top.state === "attention"    ? "var(--green)"
+      : isActiveTop && top.agentId === "codex" ? "var(--codex)"
+      : isActiveTop ? "var(--orange)"
+      : "var(--t50)";
+    nameEl.style.color = labelColor;
   }
 
   // Session dots (max 5)
@@ -486,9 +495,9 @@ document.getElementById("orb").addEventListener("dblclick", () => {
 
 const FSCALE = { small: 0.85, medium: 1.0, large: 1.2 };
 const ORB_SIZES = {
-  small:  { outer: 38, inner: 38 },
-  medium: { outer: 46, inner: 46 },
-  large:  { outer: 58, inner: 58 },
+  small:  { outer: 58, inner: 58, scale: 1.261 },
+  medium: { outer: 72, inner: 72, scale: 1.565 },
+  large:  { outer: 88, inner: 88, scale: 1.913 },
 };
 window.electronAPI.onApplyPrefs(({ theme, fontSize, orbSize }) => {
   if (theme) document.documentElement.setAttribute("data-theme", theme);
@@ -498,6 +507,7 @@ window.electronAPI.onApplyPrefs(({ theme, fontSize, orbSize }) => {
     _orbOuter = s.outer;
     document.documentElement.style.setProperty("--orb-outer", s.outer + "px");
     document.documentElement.style.setProperty("--orb-inner", s.inner + "px");
+    document.documentElement.style.setProperty("--orb-scale", String(s.scale));
     if (currentMode === "orb") window.electronAPI.reportWindowSize(s.outer, s.outer);
   }
 });

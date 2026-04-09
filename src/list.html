@@ -9,8 +9,9 @@
 
     :root {
       --font-scale:  1.0;
-      --orb-outer:   46px;
-      --orb-inner:   46px;
+      --orb-outer:   72px;
+      --orb-inner:   72px;
+      --orb-scale:   1.565;
     }
 
     /* ── Dark theme (default) ── */
@@ -133,24 +134,25 @@
       background: var(--orb-bg);
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      gap: 2px;
+      gap: calc(2px * var(--orb-scale));
       cursor: grab;
       transform-origin: center;
       will-change: transform, opacity;
+      overflow: hidden;
     }
     .orb:active { cursor: grabbing; }
     .orb-status {
-      font-size: 14px; font-weight: 500;
+      font-size: calc(14px * var(--orb-scale)); font-weight: 500;
       color: var(--t40); line-height: 1;
-      min-height: 16px; display: flex; align-items: center; justify-content: center;
+      min-height: calc(16px * var(--orb-scale)); display: flex; align-items: center; justify-content: center;
     }
     .orb-name {
-      font-size: 8px; font-weight: 600;
+      font-size: calc(8px * var(--orb-scale)); font-weight: 600;
       color: var(--t50); letter-spacing: .05em;
       text-transform: uppercase; line-height: 1;
     }
-    .orb-dots { display: flex; gap: 2px; align-items: center; }
-    .orb-dot  { width: 3px; height: 3px; border-radius: 50%; background: var(--dot-idle); }
+    .orb-dots { display: flex; gap: calc(2px * var(--orb-scale)); align-items: center; }
+    .orb-dot  { width: calc(3px * var(--orb-scale)); height: calc(3px * var(--orb-scale)); border-radius: 50%; background: var(--dot-idle); }
     .orb-dot.active { background: var(--orange); }
     .orb-dot.perm   { background: var(--amber); }
     .orb-dot.err    { background: var(--red); }
