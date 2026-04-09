@@ -88,6 +88,19 @@ function syncCursorHooks(): void {
   }
 }
 
+function syncCodeflickerHooks(): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { registerCodeflickerHooks } = require("../hooks/dist/codeflicker-install") as { registerCodeflickerHooks: (opts: object) => { added: number; updated: number } };
+    const { added, updated } = registerCodeflickerHooks({ silent: true });
+    if (added > 0 || updated > 0) {
+      console.log(`VigilCLI: synced CodeflickerCLI hooks (added ${added}, updated ${updated})`);
+    }
+  } catch (err: unknown) {
+    console.warn("VigilCLI: failed to sync CodeflickerCLI hooks:", (err as Error).message);
+  }
+}
+
 function sendStateHealthResponse(res: http.ServerResponse): void {
   const body = JSON.stringify({ ok: true, app: VIGILCLI_SERVER_ID, port: getHookServerPort() });
   res.writeHead(200, {
@@ -404,6 +417,7 @@ function startHttpServer(): void {
     syncGeminiHooks();
     syncCursorHooks();
     syncCodeBuddyHooks();
+    syncCodeflickerHooks();
     watchSettingsForHookLoss();
   });
 
@@ -423,6 +437,7 @@ return {
   syncGeminiHooks,
   syncCursorHooks,
   syncCodeBuddyHooks,
+  syncCodeflickerHooks,
   cleanup,
 };
 

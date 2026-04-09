@@ -109,6 +109,19 @@ function initServer(ctx) {
             console.warn("VigilCLI: failed to sync Cursor hooks:", err.message);
         }
     }
+    function syncCodeflickerHooks() {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { registerCodeflickerHooks } = require("../hooks/dist/codeflicker-install");
+            const { added, updated } = registerCodeflickerHooks({ silent: true });
+            if (added > 0 || updated > 0) {
+                console.log(`VigilCLI: synced CodeflickerCLI hooks (added ${added}, updated ${updated})`);
+            }
+        }
+        catch (err) {
+            console.warn("VigilCLI: failed to sync CodeflickerCLI hooks:", err.message);
+        }
+    }
     function sendStateHealthResponse(res) {
         const body = JSON.stringify({ ok: true, app: server_config_1.VIGILCLI_SERVER_ID, port: getHookServerPort() });
         res.writeHead(200, {
@@ -419,6 +432,7 @@ function initServer(ctx) {
             syncGeminiHooks();
             syncCursorHooks();
             syncCodeBuddyHooks();
+            syncCodeflickerHooks();
             watchSettingsForHookLoss();
         });
         httpServer.listen(listenPorts[listenIndex], "127.0.0.1");
@@ -437,6 +451,7 @@ function initServer(ctx) {
         syncGeminiHooks,
         syncCursorHooks,
         syncCodeBuddyHooks,
+        syncCodeflickerHooks,
         cleanup,
     };
 }

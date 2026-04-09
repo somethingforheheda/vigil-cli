@@ -15,7 +15,8 @@ const copilot_cli_1 = __importDefault(require("./copilot-cli"));
 const gemini_cli_1 = __importDefault(require("./gemini-cli"));
 const cursor_agent_1 = __importDefault(require("./cursor-agent"));
 const codebuddy_1 = __importDefault(require("./codebuddy"));
-const AGENTS = [claude_code_1.default, codex_1.default, copilot_cli_1.default, gemini_cli_1.default, cursor_agent_1.default, codebuddy_1.default];
+const codeflicker_1 = __importDefault(require("./codeflicker"));
+const AGENTS = [claude_code_1.default, codex_1.default, copilot_cli_1.default, gemini_cli_1.default, cursor_agent_1.default, codebuddy_1.default, codeflicker_1.default];
 const AGENT_MAP = new Map(AGENTS.map((a) => [a.id, a]));
 function getAllAgents() {
     return AGENTS;

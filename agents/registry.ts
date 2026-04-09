@@ -8,8 +8,9 @@ import copilotCli from "./copilot-cli";
 import geminiCli from "./gemini-cli";
 import cursorAgent from "./cursor-agent";
 import codebuddy from "./codebuddy";
+import codeflicker from "./codeflicker";
 
-const AGENTS: AgentConfig[] = [claudeCode, codex, copilotCli, geminiCli, cursorAgent, codebuddy];
+const AGENTS: AgentConfig[] = [claudeCode, codex, copilotCli, geminiCli, cursorAgent, codebuddy, codeflicker];
 const AGENT_MAP = new Map(AGENTS.map((a) => [a.id, a]));
 
 export interface ProcessEntry {
