@@ -222,17 +222,17 @@ function updateOrb() {
       if (isActive) {
         const isCodex = top.agentId === "codex";
         const cls   = isCodex ? "spin-codex" : "spin";
-        const color = isCodex ? "#38bdf8" : "var(--orange)";
+        const color = isCodex ? "var(--codex)" : "var(--orange)";
         const char  = isCodex ? SPIN_CODEX[_spinIdxCodex] : SPIN[_spinIdx];
         statusEl.innerHTML = `<span class="${cls}" style="color:${color};font-size:13px">${char}</span>`;
         statusEl.style.cssText = "";
       } else {
-        const bg = isPerm ? "var(--amber)" : isErr ? "var(--red)" : isDone ? "var(--green)" : "rgba(255,255,255,0.28)";
+        const bg = isPerm ? "var(--amber)" : isErr ? "var(--red)" : isDone ? "var(--green)" : "var(--dot-idle)";
         statusEl.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${bg}"></span>`;
         statusEl.style.cssText = "";
       }
     } else {
-      statusEl.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.15)"></span>`;
+      statusEl.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dot-idle)"></span>`;
       statusEl.style.cssText = "";
     }
   }
@@ -247,7 +247,7 @@ function updateOrb() {
   dots.innerHTML = vis.slice(0, 5).map(s => {
     const isActive = ["working","thinking","juggling"].includes(s.state);
     if (isActive && s.agentId === "codex")
-      return `<span class="orb-dot" style="background:#38bdf8"></span>`;
+      return `<span class="orb-dot" style="background:var(--codex)"></span>`;
     const c = s.state === "error" ? " err" : s.state === "notification" ? " perm" : isActive ? " active" : "";
     return `<span class="orb-dot${c}"></span>`;
   }).join("") + (vis.length > 5 ? `<span style="font-size:8px;color:#555">+${vis.length - 5}</span>` : "");
@@ -273,19 +273,20 @@ function updateCapsule() {
 
   // Minimal header: "VigilCLI" + colored session dots on the right
   indEl.innerHTML = "";
-  agentEl.style.cssText = "color:var(--t25)";
+  agentEl.style.cssText = "color:var(--t60)";
   agentEl.textContent = "VigilCLI";
   lineEl.className = "";
+  lineEl.style.background = "transparent";
   statEl.textContent = "";
   statEl.removeAttribute("style");
 
   const dotColor = s => {
     if (["working","thinking","juggling"].includes(s.state))
-      return s.agentId === "codex" ? "#38bdf8" : "var(--orange)";
+      return s.agentId === "codex" ? "var(--codex)" : "var(--orange)";
     if (s.state === "notification") return "var(--amber)";
     if (s.state === "error")        return "var(--red)";
     if (s.state === "attention")    return "var(--green)";
-    return "rgba(255,255,255,0.18)";
+    return "var(--dot-idle)";
   };
   const shown = vis.slice(0, 8);
   const extra = vis.length > 8 ? `<span style="font-size:9px;color:var(--t25);margin-left:1px">+${vis.length - 8}</span>` : "";
@@ -352,18 +353,18 @@ function buildRow(s) {
   } else if (err) {
     pill = `<span class="spill" style="color:var(--red);background:rgba(255,77,77,.1)">error</span>`;
   } else if (active) {
-    const pc = s.agentId === "codex" ? "color:#38bdf8;background:rgba(56,189,248,.1)" : "color:var(--orange);background:rgba(217,120,87,.1)";
+    const pc = s.agentId === "codex" ? "color:var(--codex);background:var(--status-bg)" : "color:var(--orange);background:var(--status-bg)";
     pill = `<span class="spill" style="${pc}">${s.state}</span>`;
   } else if (done) {
     pill = `<span class="spill" style="color:var(--green);background:rgba(102,191,115,.1)">done</span>`;
   } else {
-    pill = `<span class="spill" style="color:var(--t25);background:rgba(255,255,255,.05)">${s.state}</span>`;
+    pill = `<span class="spill" style="color:var(--t25);background:var(--status-bg)">${s.state}</span>`;
   }
 
   return `<div class="srow" data-sid="${esc(s.sessionId)}">
   <div class="sind">${ind}</div>
   <div class="sbody">
-    <div class="stitle">${esc(s.agentId || "claude")}${s.title ? ` <span style="color:var(--t50);font-weight:400">${esc(s.title)}</span>` : ""}</div>
+    <div class="stitle">${esc(s.agentId || "claude")}${s.title ? ` <span style="color:var(--t70);font-weight:400">${esc(s.title)}</span>` : ""}</div>
     ${sub ? `<div class="ssub">${sub}</div>` : ""}
     ${subagentRow}
   </div>
@@ -489,7 +490,8 @@ const ORB_SIZES = {
   medium: { outer: 46, inner: 46 },
   large:  { outer: 58, inner: 58 },
 };
-window.electronAPI.onApplyPrefs(({ fontSize, orbSize }) => {
+window.electronAPI.onApplyPrefs(({ theme, fontSize, orbSize }) => {
+  if (theme) document.documentElement.setAttribute("data-theme", theme);
   if (fontSize) document.documentElement.style.setProperty("--font-scale", FSCALE[fontSize] ?? 1.0);
   if (orbSize) {
     const s = ORB_SIZES[orbSize] || ORB_SIZES.medium;

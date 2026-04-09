@@ -6,14 +6,14 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* ── Light theme ── */
-html[data-theme="light"] {
+/* ── Pure theme (white + indigo) ── */
+html[data-theme="pure"] {
   --card-bg: #ffffff;
-  --card-border: rgba(0, 0, 0, 0.10);
+  --card-border: rgba(0, 0, 0, 0.08);
   --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.10), 0 1px 4px rgba(0, 0, 0, 0.06);
-  --text-primary: #18181b;
+  --text-primary: #111111;
   --text-muted: #6b7280;
-  --cmd-bg: #f3f4f6;
+  --cmd-bg: #f0f0f8;
   --cmd-border: rgba(0, 0, 0, 0.06);
   --cmd-color: #374151;
   --scroll-thumb: rgba(0, 0, 0, 0.12);
@@ -27,7 +27,7 @@ html[data-theme="light"] {
   --sug-bg: transparent;
   --sug-color: #6b7280;
   --sug-border: rgba(0, 0, 0, 0.08);
-  --sug-hover-bg: #f3f4f6;
+  --sug-hover-bg: #ebebf8;
   --sug-hover-color: #374151;
 }
 
@@ -56,54 +56,29 @@ html[data-theme="dark"] {
   --sug-hover-color: #e0e0f0;
 }
 
-/* ── Purple theme ── */
-html[data-theme="purple"] {
-  --card-bg: #1a0e2a;
-  --card-border: rgba(180, 130, 255, 0.14);
-  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(80, 0, 180, 0.12);
-  --text-primary: #ede0ff;
-  --text-muted: #9070c0;
-  --cmd-bg: #0e0818;
-  --cmd-border: rgba(180, 130, 255, 0.08);
-  --cmd-color: #a070d0;
-  --scroll-thumb: rgba(160, 100, 255, 0.14);
-  --scroll-thumb-hover: rgba(160, 100, 255, 0.26);
-  --btn-allow-bg: #9333ea;
-  --btn-allow-hover: #7e22ce;
-  --btn-deny-bg: rgba(180, 130, 255, 0.08);
-  --btn-deny-color: #ddc8ff;
-  --btn-deny-border: rgba(180, 130, 255, 0.14);
-  --btn-deny-hover: rgba(180, 130, 255, 0.14);
+/* ── Mint theme (mint green) ── */
+html[data-theme="mint"] {
+  --card-bg: #f0faf5;
+  --card-border: rgba(0, 160, 80, 0.18);
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.10), 0 1px 4px rgba(0, 80, 40, 0.06);
+  --text-primary: #082018;
+  --text-muted: #4a8060;
+  --cmd-bg: #e8f8f0;
+  --cmd-border: rgba(0, 160, 80, 0.10);
+  --cmd-color: #2d6040;
+  --scroll-thumb: rgba(0, 160, 80, 0.14);
+  --scroll-thumb-hover: rgba(0, 160, 80, 0.26);
+  --btn-allow-bg: #16a34a;
+  --btn-allow-hover: #15803d;
+  --btn-deny-bg: rgba(0, 160, 80, 0.08);
+  --btn-deny-color: #1a4a2a;
+  --btn-deny-border: rgba(0, 160, 80, 0.18);
+  --btn-deny-hover: rgba(0, 160, 80, 0.14);
   --sug-bg: transparent;
-  --sug-color: #9070c0;
-  --sug-border: rgba(180, 130, 255, 0.10);
-  --sug-hover-bg: rgba(180, 130, 255, 0.08);
-  --sug-hover-color: #ede0ff;
-}
-
-/* ── Ocean theme ── */
-html[data-theme="ocean"] {
-  --card-bg: #0a1828;
-  --card-border: rgba(60, 160, 255, 0.14);
-  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 80, 180, 0.12);
-  --text-primary: #d8f0ff;
-  --text-muted: #4888aa;
-  --cmd-bg: #05101e;
-  --cmd-border: rgba(60, 160, 255, 0.08);
-  --cmd-color: #5898c0;
-  --scroll-thumb: rgba(60, 160, 255, 0.14);
-  --scroll-thumb-hover: rgba(60, 160, 255, 0.26);
-  --btn-allow-bg: #0ea5e9;
-  --btn-allow-hover: #0284c7;
-  --btn-deny-bg: rgba(60, 160, 255, 0.08);
-  --btn-deny-color: #b8e0ff;
-  --btn-deny-border: rgba(60, 160, 255, 0.14);
-  --btn-deny-hover: rgba(60, 160, 255, 0.14);
-  --sug-bg: transparent;
-  --sug-color: #4888aa;
-  --sug-border: rgba(60, 160, 255, 0.10);
-  --sug-hover-bg: rgba(60, 160, 255, 0.08);
-  --sug-hover-color: #d8f0ff;
+  --sug-color: #4a8060;
+  --sug-border: rgba(0, 160, 80, 0.12);
+  --sug-hover-bg: rgba(0, 160, 80, 0.08);
+  --sug-hover-color: #082018;
 }
 
 html, body {
@@ -229,35 +204,25 @@ html[data-theme="dark"] .tool-pill[data-tool="Grep"]      { background: #3a7a9a;
 html[data-theme="dark"] .tool-pill[data-tool="Agent"]     { background: #8844bb; }
 html[data-theme="dark"] .tool-pill[data-tool="CodexExec"] { background: #1a4ec0; }
 
-/* ── Light theme pills (indigo) ── */
-html[data-theme="light"] .tool-pill[data-tool="Bash"]      { background: #4f46e5; }
-html[data-theme="light"] .tool-pill[data-tool="Edit"]      { background: #2563eb; }
-html[data-theme="light"] .tool-pill[data-tool="Write"]     { background: #7c3aed; }
-html[data-theme="light"] .tool-pill[data-tool="Read"]      { background: #059669; }
-html[data-theme="light"] .tool-pill[data-tool="Glob"]      { background: #0891b2; }
-html[data-theme="light"] .tool-pill[data-tool="Grep"]      { background: #0891b2; }
-html[data-theme="light"] .tool-pill[data-tool="Agent"]     { background: #9333ea; }
-html[data-theme="light"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8; }
+/* ── Pure theme pills (indigo) ── */
+html[data-theme="pure"] .tool-pill[data-tool="Bash"]      { background: #4f46e5; }
+html[data-theme="pure"] .tool-pill[data-tool="Edit"]      { background: #2563eb; }
+html[data-theme="pure"] .tool-pill[data-tool="Write"]     { background: #7c3aed; }
+html[data-theme="pure"] .tool-pill[data-tool="Read"]      { background: #059669; }
+html[data-theme="pure"] .tool-pill[data-tool="Glob"]      { background: #0891b2; }
+html[data-theme="pure"] .tool-pill[data-tool="Grep"]      { background: #0891b2; }
+html[data-theme="pure"] .tool-pill[data-tool="Agent"]     { background: #9333ea; }
+html[data-theme="pure"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8; }
 
-/* ── Purple theme pills ── */
-html[data-theme="purple"] .tool-pill[data-tool="Bash"]      { background: #9333ea; }
-html[data-theme="purple"] .tool-pill[data-tool="Edit"]      { background: #6d28d9; }
-html[data-theme="purple"] .tool-pill[data-tool="Write"]     { background: #a855f7; }
-html[data-theme="purple"] .tool-pill[data-tool="Read"]      { background: #7c3aed; }
-html[data-theme="purple"] .tool-pill[data-tool="Glob"]      { background: #8b5cf6; }
-html[data-theme="purple"] .tool-pill[data-tool="Grep"]      { background: #8b5cf6; }
-html[data-theme="purple"] .tool-pill[data-tool="Agent"]     { background: #c026d3; }
-html[data-theme="purple"] .tool-pill[data-tool="CodexExec"] { background: #4f46e5; }
-
-/* ── Ocean theme pills (sky/cyan) ── */
-html[data-theme="ocean"] .tool-pill[data-tool="Bash"]      { background: #0ea5e9; }
-html[data-theme="ocean"] .tool-pill[data-tool="Edit"]      { background: #0284c7; }
-html[data-theme="ocean"] .tool-pill[data-tool="Write"]     { background: #0369a1; }
-html[data-theme="ocean"] .tool-pill[data-tool="Read"]      { background: #0891b2; }
-html[data-theme="ocean"] .tool-pill[data-tool="Glob"]      { background: #06b6d4; }
-html[data-theme="ocean"] .tool-pill[data-tool="Grep"]      { background: #06b6d4; }
-html[data-theme="ocean"] .tool-pill[data-tool="Agent"]     { background: #2563eb; }
-html[data-theme="ocean"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8; }
+/* ── Mint theme pills (green) ── */
+html[data-theme="mint"] .tool-pill[data-tool="Bash"]      { background: #16a34a; }
+html[data-theme="mint"] .tool-pill[data-tool="Edit"]      { background: #15803d; }
+html[data-theme="mint"] .tool-pill[data-tool="Write"]     { background: #166534; }
+html[data-theme="mint"] .tool-pill[data-tool="Read"]      { background: #0f766e; }
+html[data-theme="mint"] .tool-pill[data-tool="Glob"]      { background: #0891b2; }
+html[data-theme="mint"] .tool-pill[data-tool="Grep"]      { background: #0891b2; }
+html[data-theme="mint"] .tool-pill[data-tool="Agent"]     { background: #7c3aed; }
+html[data-theme="mint"] .tool-pill[data-tool="CodexExec"] { background: #0284c7; }
 .header-label {
   font-size: 12px;
   font-weight: 600;
@@ -305,6 +270,10 @@ html[data-theme="ocean"] .tool-pill[data-tool="CodexExec"] { background: #1d4ed8
 }
 .diff-remove { background: #3d1a1a; color: #ff8080; }
 .diff-add    { background: #1a3d2a; color: #6fffb0; }
+html[data-theme="pure"] .diff-remove { background: #fef2f2; color: #b91c1c; }
+html[data-theme="pure"] .diff-add    { background: #f0fdf4; color: #15803d; }
+html[data-theme="mint"] .diff-remove { background: #fef2f2; color: #b91c1c; }
+html[data-theme="mint"] .diff-add    { background: #dcfce7; color: #15803d; }
 .diff-more   { font-size: 10px; color: var(--text-muted); padding-top: 3px; }
 
 /* ── Action buttons ── */
@@ -517,7 +486,8 @@ function renderCommandBlock(name, input) {
       }
       if (diff.length > MAX) {
         const more = document.createElement("div");
-        more.style.cssText = "color:rgba(255,255,255,.3);padding:4px 8px;font-size:11px";
+        more.className = "diff-more";
+        more.style.cssText = "padding:4px 8px;font-size:11px";
         more.textContent = `… ${diff.length - MAX} more lines`;
         commandBlock.appendChild(more);
       }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
@@ -8,23 +8,90 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg:          #000000;
-      --t85:         rgba(255,255,255,0.85);
-      --t70:         rgba(255,255,255,0.70);
-      --t50:         rgba(255,255,255,0.50);
-      --t40:         rgba(255,255,255,0.40);
-      --t25:         rgba(255,255,255,0.25);
-      --t10:         rgba(255,255,255,0.10);
-      --hover:       rgba(255,255,255,0.06);
-      --sep:         rgba(255,255,255,0.07);
-      --border:      rgba(255,255,255,0.13);
-      --orange:      #D97857;
-      --amber:       #FFB200;
-      --green:       #66BF73;
-      --red:         #FF4D4D;
       --font-scale:  1.0;
       --orb-outer:   46px;
       --orb-inner:   46px;
+    }
+
+    /* ── Dark theme (default) ── */
+    html[data-theme="dark"] {
+      --bg:       #000000;
+      --t85:      rgba(255,255,255,0.85);
+      --t70:      rgba(255,255,255,0.70);
+      --t60:      rgba(255,255,255,0.60);
+      --t50:      rgba(255,255,255,0.50);
+      --t40:      rgba(255,255,255,0.40);
+      --t25:      rgba(255,255,255,0.25);
+      --t10:      rgba(255,255,255,0.10);
+      --hover:    rgba(255,255,255,0.06);
+      --sep:      rgba(255,255,255,0.07);
+      --border:   rgba(255,255,255,0.13);
+      --orange:   #D97857;
+      --amber:    #FFB200;
+      --green:    #66BF73;
+      --red:      #FF4D4D;
+      --codex:    #38bdf8;
+      --dot-idle: rgba(255,255,255,0.20);
+      --orb-bg:   radial-gradient(circle at 35% 35%, #1c1c1c, #000);
+      --cap-bg:   linear-gradient(180deg, #050505 0%, #000 100%);
+      --status-bg: rgba(255,255,255,0.07);
+      --scrollbar: rgba(255,255,255,0.08);
+      --scrollbar-hover: rgba(255,255,255,0.15);
+      --pulse-glow: rgba(217,120,87,0.6);
+    }
+
+    /* ── Pure theme (white + indigo) ── */
+    html[data-theme="pure"] {
+      --bg:       #ffffff;
+      --t85:      rgba(0,0,0,0.85);
+      --t70:      rgba(0,0,0,0.70);
+      --t60:      rgba(0,0,0,0.62);
+      --t50:      rgba(0,0,0,0.55);
+      --t40:      rgba(0,0,0,0.45);
+      --t25:      rgba(0,0,0,0.32);
+      --t10:      rgba(0,0,0,0.10);
+      --hover:    rgba(0,0,0,0.04);
+      --sep:      rgba(0,0,0,0.07);
+      --border:   rgba(0,0,0,0.12);
+      --orange:   #5c6fff;
+      --amber:    #d97706;
+      --green:    #16a34a;
+      --red:      #dc2626;
+      --codex:    #0284c7;
+      --dot-idle: rgba(0,0,0,0.22);
+      --orb-bg:   radial-gradient(circle at 35% 35%, #ebebf5, #f0f0fa);
+      --cap-bg:   linear-gradient(180deg, #fafafa 0%, #f5f5ff 100%);
+      --status-bg: rgba(0,0,0,0.06);
+      --scrollbar: rgba(0,0,0,0.12);
+      --scrollbar-hover: rgba(0,0,0,0.22);
+      --pulse-glow: rgba(92,111,255,0.5);
+    }
+
+    /* ── Mint theme (mint green) ── */
+    html[data-theme="mint"] {
+      --bg:       #f0faf5;
+      --t85:      rgba(8,32,18,0.85);
+      --t70:      rgba(8,32,18,0.70);
+      --t60:      rgba(8,32,18,0.62);
+      --t50:      rgba(8,32,18,0.55);
+      --t40:      rgba(8,32,18,0.45);
+      --t25:      rgba(8,32,18,0.32);
+      --t10:      rgba(8,32,18,0.10);
+      --hover:    rgba(0,160,80,0.06);
+      --sep:      rgba(0,160,80,0.10);
+      --border:   rgba(0,160,80,0.22);
+      --orange:   #16a34a;
+      --amber:    #ca8a04;
+      --green:    #16a34a;
+      --red:      #dc2626;
+      --codex:    #0284c7;
+      --dot-idle: rgba(8,32,18,0.22);
+      --orb-bg:   radial-gradient(circle at 35% 35%, #c8f0de, #e8f8f0);
+      --cap-bg:   linear-gradient(180deg, #f5fdf8 0%, #eff9f4 100%);
+      --status-bg: rgba(0,160,80,0.08);
+      --scrollbar: rgba(0,160,80,0.14);
+      --scrollbar-hover: rgba(0,160,80,0.26);
+      --pulse-glow: rgba(22,163,74,0.5);
     }
 
     html, body { width: 100%; height: 100%; }
@@ -63,7 +130,7 @@
     .orb {
       width: var(--orb-inner); height: var(--orb-inner);
       border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #1c1c1c, #000);
+      background: var(--orb-bg);
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
       gap: 2px;
@@ -83,7 +150,7 @@
       text-transform: uppercase; line-height: 1;
     }
     .orb-dots { display: flex; gap: 2px; align-items: center; }
-    .orb-dot  { width: 3px; height: 3px; border-radius: 50%; background: rgba(255,255,255,0.18); }
+    .orb-dot  { width: 3px; height: 3px; border-radius: 50%; background: var(--dot-idle); }
     .orb-dot.active { background: var(--orange); }
     .orb-dot.perm   { background: var(--amber); }
     .orb-dot.err    { background: var(--red); }
@@ -99,9 +166,9 @@
       to   { transform: scale(0.65); opacity: 0; }
     }
     @keyframes orbStatePulse {
-      0%   { box-shadow: 0 0 0 rgba(217,120,87,.0); }
-      40%  { box-shadow: 0 0 18px rgba(217,120,87,.6); }
-      100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
+      0%   { box-shadow: 0 0 0 rgba(0,0,0,0); }
+      40%  { box-shadow: 0 0 18px var(--pulse-glow); }
+      100% { box-shadow: 0 0 8px transparent; }
     }
     .orb.pop-in   { animation: orbPopIn   .4s cubic-bezier(.34,1.36,.64,1) both; }
     .orb.exit-out { animation: orbExitOut .11s ease-in both; }
@@ -115,7 +182,7 @@
       inset: 0;
       display: flex;
       flex-direction: column;
-      background: linear-gradient(180deg, #050505 0%, #000 100%);
+      background: var(--cap-bg);
       border: 1px solid var(--border);
       border-radius: calc(var(--orb-outer) / 2);
       overflow: hidden;
@@ -174,7 +241,7 @@
     }
     .ind-dot {
       width: 6px; height: 6px; border-radius: 50%;
-      background: rgba(255,255,255,0.18);
+      background: var(--dot-idle);
       display: inline-block;
     }
     .ind-dot.g { background: var(--green); }
@@ -212,7 +279,7 @@
     #cap-status {
       font-size: calc(10px * var(--font-scale));
       padding: 2px 6px; border-radius: 6px;
-      background: rgba(255,255,255,.07); color: var(--t50);
+      background: var(--status-bg); color: var(--t50);
       white-space: nowrap; flex-shrink: 0;
     }
 
@@ -254,8 +321,8 @@
     }
     #slist::-webkit-scrollbar { width: 3px; }
     #slist::-webkit-scrollbar-track { background: transparent; }
-    #slist::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
-    #slist::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.15); }
+    #slist::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+    #slist::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
     /* ── Session row (claude-island InstanceRow) ── */
     .srow {

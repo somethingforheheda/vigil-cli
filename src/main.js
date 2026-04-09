@@ -93,7 +93,7 @@ let showSessionId = false;
 let soundMuted = false;
 let menuOpen = false;
 let _codexMonitor = null;
-let theme = "light";
+let theme = "dark";
 let fontSize = "large";
 let orbSize = "medium";
 let windowOpacity = 1.0;
@@ -713,16 +713,14 @@ function createWindow() {
         console.error("VigilCLI: listWin crashed:", details.reason);
         listWin.webContents.reload();
     });
-    // Linux: prevent accidental close
-    if (isLinux) {
-        listWin.on("close", (event) => {
-            if (!isQuitting) {
-                event.preventDefault();
-                if (!listWin.isVisible())
-                    listWin.showInactive();
-            }
-        });
-    }
+    // Prevent accidental close (Cmd+W on macOS, Alt+F4 on Windows, etc.)
+    listWin.on("close", (event) => {
+        if (!isQuitting) {
+            event.preventDefault();
+            if (!listWin.isVisible())
+                listWin.showInactive();
+        }
+    });
     guardAlwaysOnTop(listWin);
     startTopmostWatchdog();
     initFocusHelper();
