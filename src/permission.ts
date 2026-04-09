@@ -150,7 +150,11 @@ export function initPermission(ctx: PermContext): {
           if (cardPos) {
             anchorY = winBounds.y + cardPos.centerY - Math.round(bh / 2);
           } else {
-            anchorY = wa.y + wa.height - bh - margin;
+            // ORB mode (small square window): center bubble on the orb
+            const isOrb = winBounds.width <= 80 && winBounds.height <= 80;
+            anchorY = isOrb
+              ? cy - Math.round(bh / 2)
+              : wa.y + wa.height - bh - margin;
           }
           anchorY = Math.max(wa.y + margin, Math.min(anchorY, wa.y + wa.height - bh - margin));
           sessionYCursors.set(perm.sessionId, anchorY);
