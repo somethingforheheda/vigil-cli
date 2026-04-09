@@ -9,15 +9,17 @@
 // ═══════════════════════════════════════════════════════
 
 // ── Spinner (claude-island ProcessingSpinner: ·✢✳∗✻✽ @ 150ms) ──
-const SPIN = ["·", "✢", "✳", "∗", "✻", "✽"];
-let _spinIdx = 0, _spinTimer = null;
+const SPIN       = ["·", "✢", "✳", "∗", "✻", "✽"];
+const SPIN_CODEX = ["·", "○", "◎", "●"];
+let _spinIdx = 0, _spinIdxCodex = 0, _spinTimer = null;
 
 function startSpinner() {
   if (_spinTimer) return;
   _spinTimer = setInterval(() => {
-    _spinIdx = (_spinIdx + 1) % SPIN.length;
-    const f = SPIN[_spinIdx];
-    for (const el of document.querySelectorAll(".spin")) el.textContent = f;
+    _spinIdx      = (_spinIdx      + 1) % SPIN.length;
+    _spinIdxCodex = (_spinIdxCodex + 1) % SPIN_CODEX.length;
+    for (const el of document.querySelectorAll(".spin"))       el.textContent = SPIN[_spinIdx];
+    for (const el of document.querySelectorAll(".spin-codex")) el.textContent = SPIN_CODEX[_spinIdxCodex];
   }, 150);
 }
 function stopSpinner() {
@@ -196,23 +198,18 @@ function updateOrb() {
   const sorted = [...vis].sort((a,b) => (PRIO[b.state]||0) - (PRIO[a.state]||0));
   const top = sorted[0];
 
-  const hasErr  = vis.some(s => s.state === "error");
-  const hasPerm = vis.some(s => s.state === "notification");
-  const hasAct  = vis.some(s => ["working","thinking","juggling"].includes(s.state));
+  const hasAct = vis.some(s => ["working","thinking","juggling"].includes(s.state));
 
-  // Breathing animation class
-  const stateClass = hasErr ? " s-err" : hasPerm ? " s-perm" : hasAct ? " s-active" : "";
-  if (stateClass !== _lastOrbStateClass) {
-    _lastOrbStateClass = stateClass;
-    // Pulse when state changes (skip initial)
-    if (_lastOrbStateClass !== "" || stateClass !== "") {
-      orb.classList.add("state-pulse");
-      orb.addEventListener("animationend", () => orb.classList.remove("state-pulse"), { once: true });
-    }
+  // Pulse orb when top session state changes
+  const topState = top ? top.state : "";
+  if (topState !== _lastOrbStateClass) {
+    _lastOrbStateClass = topState;
+    orb.classList.add("state-pulse");
+    orb.addEventListener("animationend", () => orb.classList.remove("state-pulse"), { once: true });
   }
   // Preserve pop-in/exit-out/state-pulse classes
   const keep = ["pop-in","exit-out","state-pulse"].filter(c => orb.classList.contains(c));
-  orb.className = "orb" + stateClass;
+  orb.className = "orb";
   for (const c of keep) orb.classList.add(c);
 
   // Status symbol (top of orb)
@@ -223,7 +220,11 @@ function updateOrb() {
       const isErr    = top.state === "error";
       const isDone   = top.state === "attention";
       if (isActive) {
-        statusEl.innerHTML = `<span class="spin" style="color:var(--orange);font-size:13px">${SPIN[_spinIdx]}</span>`;
+        const isCodex = top.agentId === "codex";
+        const cls   = isCodex ? "spin-codex" : "spin";
+        const color = isCodex ? "#38bdf8" : "var(--orange)";
+        const char  = isCodex ? SPIN_CODEX[_spinIdxCodex] : SPIN[_spinIdx];
+        statusEl.innerHTML = `<span class="${cls}" style="color:${color};font-size:13px">${char}</span>`;
         statusEl.style.cssText = "";
       } else {
         const bg = isPerm ? "var(--amber)" : isErr ? "var(--red)" : isDone ? "var(--green)" : "rgba(255,255,255,0.28)";
@@ -244,8 +245,10 @@ function updateOrb() {
 
   // Session dots (max 5)
   dots.innerHTML = vis.slice(0, 5).map(s => {
-    const c = s.state === "error" ? " err" : s.state === "notification" ? " perm"
-      : ["working","thinking","juggling"].includes(s.state) ? " active" : "";
+    const isActive = ["working","thinking","juggling"].includes(s.state);
+    if (isActive && s.agentId === "codex")
+      return `<span class="orb-dot" style="background:#38bdf8"></span>`;
+    const c = s.state === "error" ? " err" : s.state === "notification" ? " perm" : isActive ? " active" : "";
     return `<span class="orb-dot${c}"></span>`;
   }).join("") + (vis.length > 5 ? `<span style="font-size:8px;color:#555">+${vis.length - 5}</span>` : "");
 
@@ -277,7 +280,8 @@ function updateCapsule() {
   statEl.removeAttribute("style");
 
   const dotColor = s => {
-    if (["working","thinking","juggling"].includes(s.state)) return "var(--orange)";
+    if (["working","thinking","juggling"].includes(s.state))
+      return s.agentId === "codex" ? "#38bdf8" : "var(--orange)";
     if (s.state === "notification") return "var(--amber)";
     if (s.state === "error")        return "var(--red)";
     if (s.state === "attention")    return "var(--green)";
@@ -306,7 +310,11 @@ function buildRow(s) {
   // State indicator
   let ind;
   if (active) {
-    ind = `<span class="spin" style="color:var(--orange)">${SPIN[_spinIdx]}</span>`;
+    const isCodex = s.agentId === "codex";
+    const cls   = isCodex ? "spin-codex" : "spin";
+    const color = isCodex ? "#38bdf8" : "var(--orange)";
+    const char  = isCodex ? SPIN_CODEX[_spinIdxCodex] : SPIN[_spinIdx];
+    ind = `<span class="${cls}" style="color:${color}">${char}</span>`;
   } else if (perm) {
     ind = `<span class="ind-dot a"></span>`;
   } else if (err) {
@@ -344,7 +352,8 @@ function buildRow(s) {
   } else if (err) {
     pill = `<span class="spill" style="color:var(--red);background:rgba(255,77,77,.1)">error</span>`;
   } else if (active) {
-    pill = `<span class="spill" style="color:var(--orange);background:rgba(217,120,87,.1)">${s.state}</span>`;
+    const pc = s.agentId === "codex" ? "color:#38bdf8;background:rgba(56,189,248,.1)" : "color:var(--orange);background:rgba(217,120,87,.1)";
+    pill = `<span class="spill" style="${pc}">${s.state}</span>`;
   } else if (done) {
     pill = `<span class="spill" style="color:var(--green);background:rgba(102,191,115,.1)">done</span>`;
   } else {

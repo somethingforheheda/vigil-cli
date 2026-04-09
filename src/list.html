@@ -68,7 +68,6 @@
       align-items: center; justify-content: center;
       gap: 2px;
       cursor: grab;
-      animation: orbBreath 3s ease-in-out infinite;
       transform-origin: center;
       will-change: transform, opacity;
     }
@@ -88,26 +87,6 @@
     .orb-dot.active { background: var(--orange); }
     .orb-dot.perm   { background: var(--amber); }
     .orb-dot.err    { background: var(--red); }
-
-    @keyframes orbBreath {
-      0%,100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
-      50%     { box-shadow: 0 0 18px rgba(217,120,87,.35); }
-    }
-    .orb.s-active { animation: orbBreathActive 1.2s ease-in-out infinite; }
-    .orb.s-perm   { animation: orbBreathPerm   0.8s ease-in-out infinite; }
-    .orb.s-err    { animation: orbBreathErr    0.6s ease-in-out infinite; }
-    @keyframes orbBreathActive {
-      0%,100% { box-shadow: 0 0 8px rgba(217,120,87,.1); }
-      50%     { box-shadow: 0 0 22px rgba(217,120,87,.45); }
-    }
-    @keyframes orbBreathPerm {
-      0%,100% { box-shadow: 0 0 8px rgba(255,178,0,.1); }
-      50%     { box-shadow: 0 0 22px rgba(255,178,0,.5); }
-    }
-    @keyframes orbBreathErr {
-      0%,100% { box-shadow: 0 0 8px rgba(255,77,77,.1); }
-      50%     { box-shadow: 0 0 22px rgba(255,77,77,.5); }
-    }
 
     /* ── ORB transition animations ── */
     @keyframes orbPopIn {
