@@ -404,6 +404,35 @@ process.stdin.on("end", () => {
     sessionId = String(payload.session_id || "default");
     cwd = String(payload.cwd ?? "");
     sessionTitle = String(payload.title ?? "");
+    if (!sessionTitle && cwd && sessionId && sessionId !== "default") {
+      try {
+        const fs2 = require("fs");
+        const os2 = require("os");
+        const cfPath = require("path");
+        const slug = cwd.replace(/^\//, "").replace(/\//g, "-").toLowerCase();
+        const jsonlPath = cfPath.join(os2.homedir(), ".codeflicker", "projects", slug, `${sessionId}.jsonl`);
+        const stat = fs2.statSync(jsonlPath);
+        if (stat.size < 5 * 1024 * 1024) {
+          const content = fs2.readFileSync(jsonlPath, "utf8");
+          let lastCustom = "", lastAi = "";
+          for (const line of content.split("\n")) {
+            if (line.includes('"type":"custom-title"')) {
+              try {
+                lastCustom = JSON.parse(line).customTitle ?? "";
+              } catch {
+              }
+            } else if (line.includes('"type":"ai-title"')) {
+              try {
+                lastAi = JSON.parse(line).aiTitle ?? "";
+              } catch {
+              }
+            }
+          }
+          sessionTitle = lastCustom || lastAi;
+        }
+      } catch {
+      }
+    }
     if (!event && payload.hook_event_name) {
       event = String(payload.hook_event_name);
       state = EVENT_TO_STATE[event] ?? "";

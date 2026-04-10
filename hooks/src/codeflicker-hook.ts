@@ -46,6 +46,32 @@ process.stdin.on("end", () => {
     cwd = String(payload.cwd ?? "");
     sessionTitle = String(payload.title ?? "");
 
+    // Read custom-title from CodeflickerCLI JSONL log (same pattern as vigilcli-hook reads transcript_path)
+    // JSONL path: ~/.codeflicker/projects/<cwd-slug>/<sessionId>.jsonl
+    // slug = cwd without leading "/" with "/" replaced by "-", lowercased
+    if (!sessionTitle && cwd && sessionId && sessionId !== "default") {
+      try {
+        const fs = require("fs") as typeof import("fs");
+        const os = require("os") as typeof import("os");
+        const cfPath = require("path") as typeof import("path");
+        const slug = cwd.replace(/^\//, "").replace(/\//g, "-").toLowerCase();
+        const jsonlPath = cfPath.join(os.homedir(), ".codeflicker", "projects", slug, `${sessionId}.jsonl`);
+        const stat = fs.statSync(jsonlPath);
+        if (stat.size < 5 * 1024 * 1024) {
+          const content = fs.readFileSync(jsonlPath, "utf8");
+          let lastCustom = "", lastAi = "";
+          for (const line of content.split("\n")) {
+            if (line.includes('"type":"custom-title"')) {
+              try { lastCustom = (JSON.parse(line) as Record<string, unknown>).customTitle as string ?? ""; } catch {}
+            } else if (line.includes('"type":"ai-title"')) {
+              try { lastAi = (JSON.parse(line) as Record<string, unknown>).aiTitle as string ?? ""; } catch {}
+            }
+          }
+          sessionTitle = lastCustom || lastAi;
+        }
+      } catch {}
+    }
+
     // CodeflickerCLI passes hook_event_name in stdin
     if (!event && payload.hook_event_name) {
       event = String(payload.hook_event_name);

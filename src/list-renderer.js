@@ -386,7 +386,8 @@ function buildRow(s) {
   return `<div class="srow" data-sid="${esc(s.sessionId)}">
   <div class="sind">${ind}</div>
   <div class="sbody">
-    <div class="stitle">${esc(s.agentId || "claude")}${s.title ? ` <span style="color:var(--t70);font-weight:400">${esc(s.title)}</span>` : ""}</div>
+    <div class="stitle">${esc(s.agentId || "claude")}</div>
+    ${s.title ? `<div class="ssub"><span style="color:var(--t70);font-weight:400">${esc(s.title)}</span></div>` : ""}
     ${sub ? `<div class="ssub">${sub}</div>` : ""}
     ${subagentRow}
   </div>
