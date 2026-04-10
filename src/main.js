@@ -98,6 +98,7 @@ let fontSize = "large";
 let orbSize = "medium";
 let windowOpacity = 1.0;
 let listCollapsed = false;
+let sessionCap = 8;
 let cardPositions = null;
 let listWinModeAnimating = false;
 const PREFS_PATH = path.join(electron_1.app.getPath("userData"), "vigilcli-prefs.json");
@@ -124,7 +125,7 @@ function savePrefs() {
     const data = {
         x, y, lang, showTray, showDock, autoStartWithClaude,
         bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize, orbSize,
-        windowOpacity, listCollapsed,
+        windowOpacity, listCollapsed, sessionCap,
     };
     try {
         fs.writeFileSync(PREFS_PATH, JSON.stringify(data));
@@ -317,6 +318,8 @@ const menuCtx = {
     set fontSize(v) { fontSize = v; },
     get orbSize() { return orbSize; },
     set orbSize(v) { orbSize = v; },
+    get sessionCap() { return sessionCap; },
+    set sessionCap(v) { sessionCap = v; },
     get menuOpen() { return menuOpen; },
     set menuOpen(v) { menuOpen = v; },
     get isQuitting() { return isQuitting; },
@@ -330,6 +333,7 @@ const menuCtx = {
     repositionBubbles: () => stackBubbles(),
     enableDoNotDisturb: () => enableDoNotDisturb(),
     disableDoNotDisturb: () => disableDoNotDisturb(),
+    sendSessionsUpdate: () => sendSessionsUpdate(),
     focusTerminalWindow: (...args) => focusTerminalWindow(...args),
     checkForUpdates: (...args) => checkForUpdates(...args),
     getUpdateMenuItem: () => getUpdateMenuItem(),
@@ -391,8 +395,8 @@ function sendSessionsUpdate() {
             lastError: s.lastError ?? null,
         });
     }
-    // Cap at 8: active sessions (non-idle/sleeping) first, then most recently updated
-    if (arr.length > 8) {
+    // Cap at sessionCap: active sessions (non-idle/sleeping) first, then most recently updated
+    if (arr.length > sessionCap) {
         arr.sort((a, b) => {
             const aActive = a.state !== "idle" && a.state !== "sleeping" ? 1 : 0;
             const bActive = b.state !== "idle" && b.state !== "sleeping" ? 1 : 0;
@@ -400,7 +404,7 @@ function sendSessionsUpdate() {
                 return bActive - aActive;
             return b.updatedAt - a.updatedAt;
         });
-        arr.splice(8);
+        arr.splice(sessionCap);
     }
     listWin.webContents.send(ipc_channels_1.IpcChannels.SESSIONS_UPDATE, arr);
 }
@@ -557,6 +561,8 @@ function createWindow() {
         windowOpacity = Math.min(1, Math.max(0.1, prefs.windowOpacity));
     if (prefs && typeof prefs.listCollapsed === "boolean")
         listCollapsed = prefs.listCollapsed;
+    if (prefs && typeof prefs.sessionCap === "number" && [4, 6, 8, 10, 12].includes(prefs.sessionCap))
+        sessionCap = prefs.sessionCap;
     if (isMac)
         applyDockVisibility();
     let startX, startY;

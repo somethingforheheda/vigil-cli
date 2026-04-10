@@ -16,4 +16,5 @@ export interface AppPrefs {
   orbSize?: string;
   windowOpacity?: number;
   listCollapsed?: boolean;
+  sessionCap?: number;
 }

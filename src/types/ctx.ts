@@ -153,6 +153,7 @@ export interface MenuContext {
   theme: string;
   fontSize: string;
   orbSize: string;
+  sessionCap: number;
   menuOpen: boolean;
   isQuitting: boolean;
   tray: Tray | null;
@@ -162,6 +163,7 @@ export interface MenuContext {
   repositionBubbles(): void;
   enableDoNotDisturb(): void;
   disableDoNotDisturb(): void;
+  sendSessionsUpdate(): void;
   focusTerminalWindow(
     sourcePid: number,
     cwd: string,

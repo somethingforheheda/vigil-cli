@@ -365,7 +365,7 @@ function buildRow(s) {
 
   // Subagent row (separate line, like old card-subagents)
   const subagentRow = s.subagentCount > 0
-    ? `<div class="ssub" style="color:var(--orange);opacity:.75">└─ ⚡ subagent${s.subagentCount > 1 ? ` ×${s.subagentCount}` : ""}</div>`
+    ? `<div class="ssub" style="color:var(--orange);opacity:.75">└─ ⊹ subagent${s.subagentCount > 1 ? ` ×${s.subagentCount}` : ""}</div>`
     : "";
 
   // Status pill (same as cap-bar shows for top session)

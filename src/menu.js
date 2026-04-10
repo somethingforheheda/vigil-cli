@@ -140,6 +140,7 @@ const i18n = {
         orbSizeSmall: "Small (58px)",
         orbSizeMedium: "Medium (72px)",
         orbSizeLarge: "Large (88px)",
+        sessionCap: "Session Limit",
     },
     zh: {
         sleep: "休眠（免打扰）",
@@ -195,6 +196,7 @@ const i18n = {
         orbSizeSmall: "小 (58px)",
         orbSizeMedium: "中 (72px)",
         orbSizeLarge: "大 (88px)",
+        sessionCap: "会话上限",
     },
 };
 function initMenu(ctx) {
@@ -381,6 +383,20 @@ function initMenu(ctx) {
                 { label: t("orbSizeMedium"), type: "radio", checked: ctx.orbSize === "medium", click: () => setOrbSize("medium") },
                 { label: t("orbSizeLarge"), type: "radio", checked: ctx.orbSize === "large", click: () => setOrbSize("large") },
             ],
+        }, {
+            label: t("sessionCap"),
+            submenu: [4, 6, 8, 10, 12].map((n) => ({
+                label: String(n),
+                type: "radio",
+                checked: ctx.sessionCap === n,
+                click: () => {
+                    ctx.sessionCap = n;
+                    ctx.savePrefs();
+                    ctx.sendSessionsUpdate();
+                    buildTrayMenu();
+                    buildContextMenu();
+                },
+            })),
         }, {
             label: t("language"),
             submenu: [

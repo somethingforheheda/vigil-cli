@@ -69,6 +69,7 @@ let fontSize = "large";
 let orbSize  = "medium";
 let windowOpacity = 1.0;
 let listCollapsed = false;
+let sessionCap = 8;
 let cardPositions: Record<string, { top: number; bottom: number; centerY: number }> | null = null;
 let listWinModeAnimating = false;
 
@@ -93,7 +94,7 @@ function savePrefs(): void {
   const data: AppPrefs & Record<string, unknown> = {
     x, y, lang, showTray, showDock, autoStartWithClaude,
     bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize, orbSize,
-    windowOpacity, listCollapsed,
+    windowOpacity, listCollapsed, sessionCap,
   };
   try { fs.writeFileSync(PREFS_PATH, JSON.stringify(data)); } catch { /* ignore */ }
 }
@@ -290,6 +291,8 @@ const menuCtx: MenuContext = {
   set fontSize(v: string) { fontSize = v; },
   get orbSize()       { return orbSize; },
   set orbSize(v: string)  { orbSize  = v; },
+  get sessionCap()    { return sessionCap; },
+  set sessionCap(v: number) { sessionCap = v; },
   get menuOpen()      { return menuOpen; },
   set menuOpen(v: boolean) { menuOpen = v; },
   get isQuitting()    { return isQuitting; },
@@ -304,6 +307,7 @@ const menuCtx: MenuContext = {
   repositionBubbles:   () => stackBubbles(),
   enableDoNotDisturb:  () => enableDoNotDisturb(),
   disableDoNotDisturb: () => disableDoNotDisturb(),
+  sendSessionsUpdate:  () => sendSessionsUpdate(),
   focusTerminalWindow: (...args) => focusTerminalWindow(...args),
   checkForUpdates:    (...args) => checkForUpdates(...args),
   getUpdateMenuItem:  () => getUpdateMenuItem(),
@@ -366,15 +370,15 @@ function sendSessionsUpdate(): void {
       lastError: s.lastError ?? null,
     });
   }
-  // Cap at 8: active sessions (non-idle/sleeping) first, then most recently updated
-  if (arr.length > 8) {
+  // Cap at sessionCap: active sessions (non-idle/sleeping) first, then most recently updated
+  if (arr.length > sessionCap) {
     arr.sort((a, b) => {
       const aActive = a.state !== "idle" && a.state !== "sleeping" ? 1 : 0;
       const bActive = b.state !== "idle" && b.state !== "sleeping" ? 1 : 0;
       if (aActive !== bActive) return bActive - aActive;
       return b.updatedAt - a.updatedAt;
     });
-    arr.splice(8);
+    arr.splice(sessionCap);
   }
   listWin.webContents.send(IpcChannels.SESSIONS_UPDATE, arr);
 }
@@ -517,6 +521,7 @@ function createWindow(): void {
   if (prefs && typeof prefs.orbSize            === "string")  orbSize            = prefs.orbSize;
   if (prefs && typeof prefs.windowOpacity      === "number")  windowOpacity      = Math.min(1, Math.max(0.1, prefs.windowOpacity));
   if (prefs && typeof prefs.listCollapsed      === "boolean") listCollapsed      = prefs.listCollapsed;
+  if (prefs && typeof prefs.sessionCap         === "number" && [4,6,8,10,12].includes(prefs.sessionCap)) sessionCap = prefs.sessionCap;
 
   if (isMac) applyDockVisibility();
 
