@@ -9,21 +9,41 @@
 // ═══════════════════════════════════════════════════════
 
 // ── Spinner (claude-island ProcessingSpinner: ·✢✳∗✻✽ @ 150ms) ──
-const SPIN       = ["·", "✢", "✳", "∗", "✻", "✽"];
-const SPIN_CODEX = ["·", "○", "◎", "●"];
-let _spinIdx = 0, _spinIdxCodex = 0, _spinTimer = null;
+const SPIN           = ["·", "✢", "✳", "∗", "✻", "✽"];
+const SPIN_CODEX     = ["·", "○", "◎", "●"];
+const SPIN_CURSOR    = ["◐", "◓", "◑", "◒"];
+const SPIN_CF        = ["▁", "▃", "▅", "▇", "▅", "▃"];
+let _spinIdx = 0, _spinIdxCodex = 0, _spinIdxCursor = 0, _spinIdxCF = 0, _spinTimer = null;
 
 function startSpinner() {
   if (_spinTimer) return;
   _spinTimer = setInterval(() => {
-    _spinIdx      = (_spinIdx      + 1) % SPIN.length;
-    _spinIdxCodex = (_spinIdxCodex + 1) % SPIN_CODEX.length;
-    for (const el of document.querySelectorAll(".spin"))       el.textContent = SPIN[_spinIdx];
-    for (const el of document.querySelectorAll(".spin-codex")) el.textContent = SPIN_CODEX[_spinIdxCodex];
+    _spinIdx       = (_spinIdx       + 1) % SPIN.length;
+    _spinIdxCodex  = (_spinIdxCodex  + 1) % SPIN_CODEX.length;
+    _spinIdxCursor = (_spinIdxCursor + 1) % SPIN_CURSOR.length;
+    _spinIdxCF     = (_spinIdxCF     + 1) % SPIN_CF.length;
+    for (const el of document.querySelectorAll(".spin"))        el.textContent = SPIN[_spinIdx];
+    for (const el of document.querySelectorAll(".spin-codex"))  el.textContent = SPIN_CODEX[_spinIdxCodex];
+    for (const el of document.querySelectorAll(".spin-cursor")) el.textContent = SPIN_CURSOR[_spinIdxCursor];
+    for (const el of document.querySelectorAll(".spin-cf"))     el.textContent = SPIN_CF[_spinIdxCF];
   }, 150);
 }
 function stopSpinner() {
   if (_spinTimer) { clearInterval(_spinTimer); _spinTimer = null; }
+}
+
+// ── Per-agent spinner / color helpers ──
+function spinnerInfo(agentId) {
+  if (agentId === "codex")        return { cls: "spin-codex",  color: "var(--codex)",       char: SPIN_CODEX[_spinIdxCodex]  };
+  if (agentId === "cursor-agent") return { cls: "spin-cursor", color: "var(--cursor)",      char: SPIN_CURSOR[_spinIdxCursor] };
+  if (agentId === "codeflicker")  return { cls: "spin-cf",     color: "var(--codeflicker)", char: SPIN_CF[_spinIdxCF]        };
+  return                                 { cls: "spin",         color: "var(--orange)",      char: SPIN[_spinIdx]             };
+}
+function agentColor(agentId) {
+  if (agentId === "codex")        return "var(--codex)";
+  if (agentId === "cursor-agent") return "var(--cursor)";
+  if (agentId === "codeflicker")  return "var(--codeflicker)";
+  return "var(--orange)";
 }
 
 // ── State ──
@@ -220,11 +240,8 @@ function updateOrb() {
       const isErr    = top.state === "error";
       const isDone   = top.state === "attention";
       if (isActive) {
-        const isCodex = top.agentId === "codex";
-        const cls   = isCodex ? "spin-codex" : "spin";
-        const color = isCodex ? "var(--codex)" : "var(--orange)";
-        const char  = isCodex ? SPIN_CODEX[_spinIdxCodex] : SPIN[_spinIdx];
-        statusEl.innerHTML = `<span class="${cls}" style="color:${color};font-size:13px">${char}</span>`;
+        const si = spinnerInfo(top.agentId);
+        statusEl.innerHTML = `<span class="${si.cls}" style="color:${si.color};font-size:13px">${si.char}</span>`;
         statusEl.style.cssText = "";
       } else {
         const bg = isPerm ? "var(--amber)" : isErr ? "var(--red)" : isDone ? "var(--green)" : "var(--dot-idle)";
@@ -246,8 +263,7 @@ function updateOrb() {
       : top.state === "notification" ? "var(--amber)"
       : top.state === "error"        ? "var(--red)"
       : top.state === "attention"    ? "var(--green)"
-      : isActiveTop && top.agentId === "codex" ? "var(--codex)"
-      : isActiveTop ? "var(--orange)"
+      : isActiveTop ? agentColor(top.agentId)
       : "var(--t50)";
     nameEl.style.color = labelColor;
   }
@@ -255,8 +271,8 @@ function updateOrb() {
   // Session dots (max 5)
   dots.innerHTML = vis.slice(0, 5).map(s => {
     const isActive = ["working","thinking","juggling"].includes(s.state);
-    if (isActive && s.agentId === "codex")
-      return `<span class="orb-dot" style="background:var(--codex)"></span>`;
+    if (isActive)
+      return `<span class="orb-dot" style="background:${agentColor(s.agentId)}"></span>`;
     const c = s.state === "error" ? " err" : s.state === "notification" ? " perm" : isActive ? " active" : "";
     return `<span class="orb-dot${c}"></span>`;
   }).join("") + (vis.length > 5 ? `<span style="font-size:8px;color:#555">+${vis.length - 5}</span>` : "");
@@ -291,7 +307,7 @@ function updateCapsule() {
 
   const dotColor = s => {
     if (["working","thinking","juggling"].includes(s.state))
-      return s.agentId === "codex" ? "var(--codex)" : "var(--orange)";
+      return agentColor(s.agentId);
     if (s.state === "notification") return "var(--amber)";
     if (s.state === "error")        return "var(--red)";
     if (s.state === "attention")    return "var(--green)";
@@ -320,11 +336,8 @@ function buildRow(s) {
   // State indicator
   let ind;
   if (active) {
-    const isCodex = s.agentId === "codex";
-    const cls   = isCodex ? "spin-codex" : "spin";
-    const color = isCodex ? "#38bdf8" : "var(--orange)";
-    const char  = isCodex ? SPIN_CODEX[_spinIdxCodex] : SPIN[_spinIdx];
-    ind = `<span class="${cls}" style="color:${color}">${char}</span>`;
+    const si = spinnerInfo(s.agentId);
+    ind = `<span class="${si.cls}" style="color:${si.color}">${si.char}</span>`;
   } else if (perm) {
     ind = `<span class="ind-dot a"></span>`;
   } else if (err) {
@@ -362,7 +375,7 @@ function buildRow(s) {
   } else if (err) {
     pill = `<span class="spill" style="color:var(--red);background:rgba(255,77,77,.1)">error</span>`;
   } else if (active) {
-    const pc = s.agentId === "codex" ? "color:var(--codex);background:var(--status-bg)" : "color:var(--orange);background:var(--status-bg)";
+    const pc = `color:${agentColor(s.agentId)};background:var(--status-bg)`;
     pill = `<span class="spill" style="${pc}">${s.state}</span>`;
   } else if (done) {
     pill = `<span class="spill" style="color:var(--green);background:rgba(102,191,115,.1)">done</span>`;

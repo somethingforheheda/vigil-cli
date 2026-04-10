@@ -391,6 +391,17 @@ function sendSessionsUpdate() {
             lastError: s.lastError ?? null,
         });
     }
+    // Cap at 8: active sessions (non-idle/sleeping) first, then most recently updated
+    if (arr.length > 8) {
+        arr.sort((a, b) => {
+            const aActive = a.state !== "idle" && a.state !== "sleeping" ? 1 : 0;
+            const bActive = b.state !== "idle" && b.state !== "sleeping" ? 1 : 0;
+            if (aActive !== bActive)
+                return bActive - aActive;
+            return b.updatedAt - a.updatedAt;
+        });
+        arr.splice(8);
+    }
     listWin.webContents.send(ipc_channels_1.IpcChannels.SESSIONS_UPDATE, arr);
 }
 // ── VS Code / Cursor terminal-focus extension ──
@@ -798,21 +809,26 @@ else {
         catch (err) {
             console.warn("VigilCLI: Codex log monitor not started:", err.message);
         }
-        try {
-            installTerminalFocusExtension();
-        }
-        catch (err) {
-            console.warn("VigilCLI: failed to auto-install terminal-focus extension:", err.message);
-        }
+        // Defer non-critical startup work until after first paint
+        setTimeout(() => {
+            try {
+                installTerminalFocusExtension();
+            }
+            catch (err) {
+                console.warn("VigilCLI: failed to auto-install terminal-focus extension:", err.message);
+            }
+        }, 2000);
         // Attempt to load updater (non-fatal if not yet ported)
-        try {
-            _loadUpdater();
-            const u = _updater;
-            if (u?.setupAutoUpdater)
-                u.setupAutoUpdater();
-            setTimeout(() => checkForUpdates(false), 5000);
-        }
-        catch { /* updater optional */ }
+        setTimeout(() => {
+            try {
+                _loadUpdater();
+                const u = _updater;
+                if (u?.setupAutoUpdater)
+                    u.setupAutoUpdater();
+                setTimeout(() => checkForUpdates(false), 5000);
+            }
+            catch { /* updater optional */ }
+        }, 3000);
     });
     electron_1.app.on("before-quit", () => {
         isQuitting = true;

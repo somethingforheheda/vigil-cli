@@ -46,6 +46,7 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const server_config_1 = require("../hooks/dist/server-config");
+const server_config_2 = require("../hooks/dist/server-config");
 const HookPayloadParser_1 = require("./data/HookPayloadParser");
 function initServer(ctx) {
     let httpServer = null;
@@ -53,7 +54,7 @@ function initServer(ctx) {
     function getHookServerPort() {
         return activeServerPort ?? (0, server_config_1.readRuntimePort)() ?? server_config_1.DEFAULT_SERVER_PORT;
     }
-    function syncVigilCLIHooks() {
+    function syncVigilCLIHooks(nodeBin) {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const { registerHooks } = require("../hooks/dist/install");
@@ -61,6 +62,7 @@ function initServer(ctx) {
                 silent: true,
                 autoStart: ctx.autoStartWithClaude,
                 port: getHookServerPort(),
+                ...(nodeBin !== undefined ? { nodeBin } : {}),
             });
             if (added > 0 || updated > 0 || removed > 0) {
                 console.log(`VigilCLI: synced hooks (added ${added}, updated ${updated}, removed ${removed})`);
@@ -70,11 +72,11 @@ function initServer(ctx) {
             console.warn("VigilCLI: failed to sync hooks:", err.message);
         }
     }
-    function syncGeminiHooks() {
+    function syncGeminiHooks(nodeBin) {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const { registerGeminiHooks } = require("../hooks/dist/gemini-install");
-            const { added, updated } = registerGeminiHooks({ silent: true });
+            const { added, updated } = registerGeminiHooks({ silent: true, ...(nodeBin !== undefined ? { nodeBin } : {}) });
             if (added > 0 || updated > 0) {
                 console.log(`VigilCLI: synced Gemini hooks (added ${added}, updated ${updated})`);
             }
@@ -83,11 +85,11 @@ function initServer(ctx) {
             console.warn("VigilCLI: failed to sync Gemini hooks:", err.message);
         }
     }
-    function syncCodeBuddyHooks() {
+    function syncCodeBuddyHooks(nodeBin) {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const { registerCodeBuddyHooks } = require("../hooks/dist/codebuddy-install");
-            const { added, updated } = registerCodeBuddyHooks({ silent: true });
+            const { added, updated } = registerCodeBuddyHooks({ silent: true, ...(nodeBin !== undefined ? { nodeBin } : {}) });
             if (added > 0 || updated > 0) {
                 console.log(`VigilCLI: synced CodeBuddy hooks (added ${added}, updated ${updated})`);
             }
@@ -96,11 +98,11 @@ function initServer(ctx) {
             console.warn("VigilCLI: failed to sync CodeBuddy hooks:", err.message);
         }
     }
-    function syncCursorHooks() {
+    function syncCursorHooks(nodeBin) {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const { registerCursorHooks } = require("../hooks/dist/cursor-install");
-            const { added, updated } = registerCursorHooks({ silent: true });
+            const { added, updated } = registerCursorHooks({ silent: true, ...(nodeBin !== undefined ? { nodeBin } : {}) });
             if (added > 0 || updated > 0) {
                 console.log(`VigilCLI: synced Cursor hooks (added ${added}, updated ${updated})`);
             }
@@ -109,11 +111,11 @@ function initServer(ctx) {
             console.warn("VigilCLI: failed to sync Cursor hooks:", err.message);
         }
     }
-    function syncCodeflickerHooks() {
+    function syncCodeflickerHooks(nodeBin) {
         try {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const { registerCodeflickerHooks } = require("../hooks/dist/codeflicker-install");
-            const { added, updated } = registerCodeflickerHooks({ silent: true });
+            const { added, updated } = registerCodeflickerHooks({ silent: true, ...(nodeBin !== undefined ? { nodeBin } : {}) });
             if (added > 0 || updated > 0) {
                 console.log(`VigilCLI: synced CodeflickerCLI hooks (added ${added}, updated ${updated})`);
             }
@@ -428,11 +430,17 @@ function initServer(ctx) {
             activeServerPort = listenPorts[listenIndex];
             (0, server_config_1.writeRuntimeConfig)(activeServerPort);
             console.log(`VigilCLI state server listening on 127.0.0.1:${activeServerPort}`);
-            syncVigilCLIHooks();
-            syncGeminiHooks();
-            syncCursorHooks();
-            syncCodeBuddyHooks();
-            syncCodeflickerHooks();
+            // Defer hook syncing until after first paint — each installer may spawn
+            // processes (e.g. `claude --version`) that block the main thread for up to 5s.
+            // Resolve node bin once here to avoid 5 independent shell spawns.
+            setTimeout(() => {
+                const nodeBin = (0, server_config_2.resolveNodeBin)();
+                syncVigilCLIHooks(nodeBin);
+                syncGeminiHooks(nodeBin);
+                syncCursorHooks(nodeBin);
+                syncCodeBuddyHooks(nodeBin);
+                syncCodeflickerHooks(nodeBin);
+            }, 1500);
             watchSettingsForHookLoss();
         });
         httpServer.listen(listenPorts[listenIndex], "127.0.0.1");
