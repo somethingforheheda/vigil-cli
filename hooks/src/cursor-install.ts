@@ -111,6 +111,28 @@ export function registerCursorHooks(options: RegisterCursorHooksOptions = {}): {
 
 export { CURSOR_HOOK_EVENTS };
 
+export function unregisterCursorHooks(hooksPath?: string): number {
+  const filePath = hooksPath ?? path.join(os.homedir(), ".cursor", "hooks.json");
+  let settings: Record<string, unknown>;
+  try { settings = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; }
+  catch { return 0; }
+  const hooks = settings.hooks as Record<string, unknown[]> | undefined;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next = arr.filter((entry) => {
+      if (!entry || typeof (entry as Record<string, unknown>).command !== "string") return true;
+      if ((entry as Record<string, string>).command.includes(MARKER)) { removed++; changed = true; return false; }
+      return true;
+    });
+    if (next.length !== arr.length) { hooks[event] = next; }
+  }
+  if (changed) writeJsonAtomic(filePath, settings);
+  return removed;
+}
+
 if (require.main === module) {
   try {
     registerCursorHooks({});

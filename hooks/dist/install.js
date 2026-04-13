@@ -33,7 +33,8 @@ __export(install_exports, {
   __test: () => __test,
   isAutoStartRegistered: () => isAutoStartRegistered,
   registerHooks: () => registerHooks,
-  unregisterAutoStart: () => unregisterAutoStart
+  unregisterAutoStart: () => unregisterAutoStart,
+  unregisterVigilCLIHooks: () => unregisterVigilCLIHooks
 });
 module.exports = __toCommonJS(install_exports);
 var fs2 = __toESM(require("fs"));
@@ -507,6 +508,59 @@ function isAutoStartRegistered() {
     return false;
   }
 }
+function unregisterVigilCLIHooks(settingsPath) {
+  const filePath = settingsPath ?? path2.join(os2.homedir(), ".claude", "settings.json");
+  let settings;
+  try {
+    settings = JSON.parse(fs2.readFileSync(filePath, "utf-8"));
+  } catch {
+    return 0;
+  }
+  const hooks = settings.hooks;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== "object") {
+        next.push(entry);
+        continue;
+      }
+      const e = entry;
+      const topCmd = typeof e.command === "string" ? e.command : "";
+      if (topCmd.includes(MARKER) || topCmd.includes(AUTO_START_MARKER) || topCmd.includes(LEGACY_AUTO_START_MARKER)) {
+        removed++;
+        changed = true;
+        continue;
+      }
+      if (!Array.isArray(e.hooks)) {
+        next.push(entry);
+        continue;
+      }
+      const filtered = e.hooks.filter((h) => {
+        if (h.command?.includes(MARKER) || h.command?.includes(AUTO_START_MARKER) || h.command?.includes(LEGACY_AUTO_START_MARKER)) {
+          removed++;
+          changed = true;
+          return false;
+        }
+        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) {
+          removed++;
+          changed = true;
+          return false;
+        }
+        return true;
+      });
+      if (filtered.length !== e.hooks.length) changed = true;
+      if (filtered.length === 0 && !topCmd) continue;
+      next.push({ ...e, hooks: filtered });
+    }
+    hooks[event] = next;
+  }
+  if (changed) writeJsonAtomic(filePath, settings);
+  return removed;
+}
 var __test = {
   getClaudeVersion,
   versionLessThan,
@@ -526,5 +580,6 @@ if (require.main === module) {
   __test,
   isAutoStartRegistered,
   registerHooks,
-  unregisterAutoStart
+  unregisterAutoStart,
+  unregisterVigilCLIHooks
 });

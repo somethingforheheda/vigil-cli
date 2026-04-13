@@ -3,7 +3,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { resolveNodeBin } from "./server-config";
+import { resolveNodeBin, readRuntimePort, DEFAULT_SERVER_PORT, buildPermissionUrl } from "./server-config";
+
+const HTTP_MARKER = "/permission";
 
 const MARKER = "codeflicker-hook.js";
 
@@ -16,10 +18,11 @@ const CODEFLICKER_HOOK_EVENTS = [
 
 type HookEntry = {
   command?: string;
-  hooks?: Array<{ command?: string; type?: string; url?: string }>;
+  hooks?: Array<{ command?: string; type?: string; url?: string; timeout?: number }>;
   matcher?: string;
   type?: string;
   url?: string;
+  timeout?: number;
 };
 
 function extractExistingNodeBin(config: Record<string, unknown>, marker: string): string | null {
@@ -66,6 +69,7 @@ interface RegisterCodeflickerHooksOptions {
   silent?: boolean;
   configPath?: string;
   nodeBin?: string | null;
+  port?: number;
 }
 
 export function registerCodeflickerHooks(
@@ -94,6 +98,9 @@ export function registerCodeflickerHooks(
 
   const resolved = options.nodeBin !== undefined ? options.nodeBin : resolveNodeBin();
   const nodeBin = resolved ?? extractExistingNodeBin(config, MARKER) ?? "node";
+  const permUrl = buildPermissionUrl(
+    Number.isInteger(options.port) ? options.port! : (readRuntimePort() ?? DEFAULT_SERVER_PORT),
+  );
 
   if (!config.hooks || typeof config.hooks !== "object") config.hooks = {};
   const hooks = config.hooks as Record<string, HookEntry[]>;
@@ -125,10 +132,37 @@ export function registerCodeflickerHooks(
 
     if (found) {
       if (stalePath) { updated++; changed = true; } else { skipped++; }
-      continue;
+    } else {
+      hooks[event].push({ matcher: "", hooks: [{ type: "command", command: desiredCommand }] });
+      added++; changed = true;
     }
-    hooks[event].push({ matcher: "", hooks: [{ type: "command", command: desiredCommand }] });
-    added++; changed = true;
+
+    // ── PermissionRequest: also register http hook for blocking approval ──
+    if (event === "PermissionRequest") {
+      let httpFound = false;
+      for (const entry of hooks[event]) {
+        if (!entry || typeof entry !== "object") continue;
+        if (Array.isArray(entry.hooks)) {
+          for (const h of entry.hooks) {
+            if (!h || h.type !== "http" || typeof h.url !== "string" || !h.url.includes(HTTP_MARKER)) continue;
+            httpFound = true;
+            if (h.url !== permUrl) { h.url = permUrl; updated++; changed = true; } else { skipped++; }
+            break;
+          }
+        }
+        if (httpFound) break;
+      }
+      if (!httpFound) {
+        // Inject into the first entry's hooks array (shared matcher entry)
+        const firstEntry = hooks[event][0];
+        if (firstEntry && Array.isArray(firstEntry.hooks)) {
+          firstEntry.hooks.push({ type: "http", url: permUrl, timeout: 600 });
+        } else {
+          hooks[event].push({ matcher: "", hooks: [{ type: "http", url: permUrl, timeout: 600 }] });
+        }
+        added++; changed = true;
+      }
+    }
   }
 
   if (added > 0 || changed) writeJsonAtomic(configPath, config);
@@ -139,6 +173,36 @@ export function registerCodeflickerHooks(
 }
 
 export { CODEFLICKER_HOOK_EVENTS };
+
+export function unregisterCodeflickerHooks(configPath?: string): number {
+  const filePath = configPath ?? path.join(os.homedir(), ".codeflicker", "config.json");
+  let config: Record<string, unknown>;
+  try { config = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; }
+  catch { return 0; }
+  const hooks = config.hooks as Record<string, HookEntry[]> | undefined;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next: HookEntry[] = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== "object") { next.push(entry); continue; }
+      if (!Array.isArray(entry.hooks)) { next.push(entry); continue; }
+      const filtered = entry.hooks.filter((h) => {
+        if (h.command?.includes(MARKER)) { removed++; changed = true; return false; }
+        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) { removed++; changed = true; return false; }
+        return true;
+      });
+      if (filtered.length !== entry.hooks.length) changed = true;
+      if (filtered.length === 0) continue; // drop empty entry
+      next.push({ ...entry, hooks: filtered });
+    }
+    hooks[event] = next;
+  }
+  if (changed) writeJsonAtomic(filePath, config);
+  return removed;
+}
 
 if (require.main === module) {
   try { registerCodeflickerHooks({}); }

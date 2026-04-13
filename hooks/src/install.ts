@@ -375,6 +375,39 @@ export function isAutoStartRegistered(): boolean {
   } catch { return false; }
 }
 
+export function unregisterVigilCLIHooks(settingsPath?: string): number {
+  const filePath = settingsPath ?? path.join(os.homedir(), ".claude", "settings.json");
+  let settings: Record<string, unknown>;
+  try { settings = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; }
+  catch { return 0; }
+  const hooks = settings.hooks as Record<string, unknown[]> | undefined;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next: unknown[] = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== "object") { next.push(entry); continue; }
+      const e = entry as HookEntry & { type?: string; url?: string };
+      const topCmd = typeof e.command === "string" ? e.command : "";
+      if (topCmd.includes(MARKER) || topCmd.includes(AUTO_START_MARKER) || topCmd.includes(LEGACY_AUTO_START_MARKER)) { removed++; changed = true; continue; }
+      if (!Array.isArray(e.hooks)) { next.push(entry); continue; }
+      const filtered = (e.hooks as Array<{ command?: string; type?: string; url?: string }>).filter((h) => {
+        if (h.command?.includes(MARKER) || h.command?.includes(AUTO_START_MARKER) || h.command?.includes(LEGACY_AUTO_START_MARKER)) { removed++; changed = true; return false; }
+        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) { removed++; changed = true; return false; }
+        return true;
+      });
+      if (filtered.length !== e.hooks.length) changed = true;
+      if (filtered.length === 0 && !topCmd) continue;
+      next.push({ ...e, hooks: filtered });
+    }
+    hooks[event] = next;
+  }
+  if (changed) writeJsonAtomic(filePath, settings);
+  return removed;
+}
+
 export const __test = {
   getClaudeVersion,
   versionLessThan,

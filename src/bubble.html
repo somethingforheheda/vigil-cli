@@ -413,6 +413,7 @@ function getShadowOutsets(el) {
 }
 
 function formatDetail(name, input) {
+  name = name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
   if (!input || typeof input !== "object") return "";
   if (name === "Bash" && input.command) return truncate(input.command, 200);
   if ((name === "Edit" || name === "Write" || name === "Read") && input.file_path)
@@ -459,6 +460,7 @@ function lcsLineDiff(oldStr, newStr) {
 }
 
 function renderCommandBlock(name, input) {
+  name = name ? name.charAt(0).toUpperCase() + name.slice(1) : name;
   commandBlock.innerHTML = "";
   commandBlock.classList.remove("scrollable-lg");
 
@@ -650,11 +652,14 @@ function show(data) {
   }
 
   // ── Normal permission request ──
-  toolPill.textContent = data.toolName || "Tool";
-  toolPill.setAttribute("data-tool", data.toolName || "");
+  const toolName = data.toolName
+    ? data.toolName.charAt(0).toUpperCase() + data.toolName.slice(1)
+    : "Tool";
+  toolPill.textContent = toolName;
+  toolPill.setAttribute("data-tool", toolName);
   toolPill.style.display = "";
   headerLabel.textContent = data.lang === "zh" ? "\u6743\u9650\u8BF7\u6C42" : "Permission";
-  renderCommandBlock(data.toolName, data.toolInput);
+  renderCommandBlock(toolName, data.toolInput);
   btnAllow.textContent = data.lang === "zh" ? "\u6279\u51C6" : "Allow";
   btnDeny.textContent  = data.lang === "zh" ? "\u62D2\u7EDD" : "Deny";
   btnDeny.style.display = "";

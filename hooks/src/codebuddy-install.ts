@@ -144,6 +144,38 @@ export function registerCodeBuddyHooks(options: RegisterCodeBuddyHooksOptions = 
 
 export { CODEBUDDY_HOOK_EVENTS };
 
+export function unregisterCodeBuddyHooks(settingsPath?: string): number {
+  const filePath = settingsPath ?? path.join(os.homedir(), ".codebuddy", "settings.json");
+  let settings: Record<string, unknown>;
+  try { settings = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; }
+  catch { return 0; }
+  const hooks = settings.hooks as Record<string, HookEntry[]> | undefined;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next: HookEntry[] = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== "object") { next.push(entry); continue; }
+      const topCmd = typeof entry.command === "string" ? entry.command : "";
+      if (topCmd.includes(MARKER)) { removed++; changed = true; continue; }
+      if (!Array.isArray(entry.hooks)) { next.push(entry); continue; }
+      const filtered = entry.hooks.filter((h) => {
+        if (h.command?.includes(MARKER)) { removed++; changed = true; return false; }
+        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) { removed++; changed = true; return false; }
+        return true;
+      });
+      if (filtered.length !== entry.hooks.length) changed = true;
+      if (filtered.length === 0 && !topCmd) continue;
+      next.push(filtered.length === entry.hooks.length ? entry : { ...entry, hooks: filtered });
+    }
+    hooks[event] = next;
+  }
+  if (changed) writeJsonAtomic(filePath, settings);
+  return removed;
+}
+
 if (require.main === module) {
   try { registerCodeBuddyHooks({}); }
   catch (err) { console.error((err as Error).message); process.exit(1); }

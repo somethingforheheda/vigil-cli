@@ -329,7 +329,7 @@ function initServer(ctx) {
                                 editor: null,
                                 pidChain: null,
                                 agentPid: null,
-                                agentId: "claude-code",
+                                agentId: existingSession?.agentId ?? "claude-code",
                             });
                             const permEntry = {
                                 res,
@@ -379,7 +379,7 @@ function initServer(ctx) {
                             editor: null,
                             pidChain: null,
                             agentPid: null,
-                            agentId: "claude-code",
+                            agentId: existingSession?.agentId ?? "claude-code",
                         });
                         const abortHandler = () => {
                             if (res.writableFinished)

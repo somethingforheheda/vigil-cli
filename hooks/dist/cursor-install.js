@@ -31,7 +31,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var cursor_install_exports = {};
 __export(cursor_install_exports, {
   CURSOR_HOOK_EVENTS: () => CURSOR_HOOK_EVENTS,
-  registerCursorHooks: () => registerCursorHooks
+  registerCursorHooks: () => registerCursorHooks,
+  unregisterCursorHooks: () => unregisterCursorHooks
 });
 module.exports = __toCommonJS(cursor_install_exports);
 var fs2 = __toESM(require("fs"));
@@ -203,6 +204,36 @@ function registerCursorHooks(options = {}) {
   if (!options.silent) console.log(`VigilCLI Cursor hooks \u2192 ${hooksPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
   return { added, skipped, updated };
 }
+function unregisterCursorHooks(hooksPath) {
+  const filePath = hooksPath ?? path2.join(os2.homedir(), ".cursor", "hooks.json");
+  let settings;
+  try {
+    settings = JSON.parse(fs2.readFileSync(filePath, "utf-8"));
+  } catch {
+    return 0;
+  }
+  const hooks = settings.hooks;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next = arr.filter((entry) => {
+      if (!entry || typeof entry.command !== "string") return true;
+      if (entry.command.includes(MARKER)) {
+        removed++;
+        changed = true;
+        return false;
+      }
+      return true;
+    });
+    if (next.length !== arr.length) {
+      hooks[event] = next;
+    }
+  }
+  if (changed) writeJsonAtomic(filePath, settings);
+  return removed;
+}
 if (require.main === module) {
   try {
     registerCursorHooks({});
@@ -214,5 +245,6 @@ if (require.main === module) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CURSOR_HOOK_EVENTS,
-  registerCursorHooks
+  registerCursorHooks,
+  unregisterCursorHooks
 });

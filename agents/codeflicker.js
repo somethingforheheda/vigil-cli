@@ -28,7 +28,7 @@ const codeflicker = {
     },
     capabilities: {
         httpHook: true,
-        permissionApproval: false, // CodeflickerCLI uses command hooks only, no http hook type
+        permissionApproval: true, // CodeflickerCLI supports http hook type for PermissionRequest
         sessionEnd: true,
         subagent: true,
     },

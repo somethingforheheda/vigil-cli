@@ -1,7 +1,7 @@
 // src/menu.ts — Menu & tray system for vigilCli
 
 import type { MenuContext } from "./types/ctx";
-import { app, BrowserWindow, Menu, Tray, nativeImage, screen } from "electron";
+import { app, BrowserWindow, dialog, Menu, Tray, nativeImage, screen } from "electron";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -105,6 +105,9 @@ const i18n = {
     orbSizeMedium: "Medium (72px)",
     orbSizeLarge: "Large (88px)",
     sessionCap: "Session Limit",
+    clearAllHooks: "Clear Hook Configs…",
+    clearAllHooksConfirm: "Remove all VigilCLI hook entries from Claude Code, Cursor, Gemini, CodeFlicker, and CodeBuddy config files?",
+    clearAllHooksDone: "Done — removed {n} hook entries.\n\nRestart VigilCLI to re-register hooks.",
   },
   zh: {
     sleep: "休眠（免打扰）",
@@ -161,6 +164,9 @@ const i18n = {
     orbSizeMedium: "中 (72px)",
     orbSizeLarge: "大 (88px)",
     sessionCap: "会话上限",
+    clearAllHooks: "清空 Hook 配置…",
+    clearAllHooksConfirm: "将清空 Claude Code、Cursor、Gemini、CodeFlicker、CodeBuddy 配置文件中所有 VigilCLI hook 条目，确认继续？",
+    clearAllHooksDone: "完成，共清除 {n} 条 hook 记录。\n\n重启 VigilCLI 可重新注册 hooks。",
   },
 } as const;
 
@@ -332,6 +338,40 @@ export function initMenu(ctx: MenuContext): {
           ctx.savePrefs();
           buildTrayMenu();
           buildContextMenu();
+        },
+      },
+      {
+        label: t("clearAllHooks"),
+        click: async () => {
+          const { response } = await dialog.showMessageBox({
+            type: "warning",
+            buttons: [ctx.lang === "zh" ? "取消" : "Cancel", ctx.lang === "zh" ? "清空" : "Clear"],
+            defaultId: 0,
+            cancelId: 0,
+            message: t("clearAllHooks").replace("…", ""),
+            detail: t("clearAllHooksConfirm"),
+          });
+          if (response !== 1) return;
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const { clearAllVigilCLIHooks } = require("../hooks/dist/clear-all-hooks") as {
+              clearAllVigilCLIHooks(): { total: number };
+            };
+            const { total } = clearAllVigilCLIHooks();
+            await dialog.showMessageBox({
+              type: "info",
+              buttons: ["OK"],
+              message: t("clearAllHooks").replace("…", ""),
+              detail: t("clearAllHooksDone").replace("{n}", String(total)),
+            });
+          } catch (err: unknown) {
+            await dialog.showMessageBox({
+              type: "error",
+              buttons: ["OK"],
+              message: "Error",
+              detail: (err as Error).message,
+            });
+          }
         },
       },
     ];

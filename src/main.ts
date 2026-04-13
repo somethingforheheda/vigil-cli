@@ -1,4 +1,5 @@
 // src/main.ts — Electron main process for vigilCli
+// test comment
 
 // MUST be set before any BrowserWindow is created
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -490,17 +491,24 @@ function animateListWindowBounds(
   tick();
 }
 
-function getCenteredBounds(width: number, height: number): Electron.Rectangle {
+function getCenteredBounds(width: number, height: number, strict = false): Electron.Rectangle {
   if (!listWin || listWin.isDestroyed()) return { x: 0, y: 0, width, height };
   const { x, y, width: oldW, height: oldH } = listWin.getBounds();
   const centerX = x + oldW / 2;
   const centerY = y + oldH / 2;
-  const clamped = clampToScreen(
-    Math.round(centerX - width / 2),
-    Math.round(centerY - height / 2),
-    width,
-    height,
-  );
+  const rawX = Math.round(centerX - width / 2);
+  const rawY = Math.round(centerY - height / 2);
+  if (strict) {
+    // Expanding to panel: ensure the panel stays fully within the work area
+    const nearest = getNearestWorkArea(centerX, centerY);
+    return {
+      x: Math.max(nearest.x, Math.min(rawX, nearest.x + nearest.width - width)),
+      y: Math.max(nearest.y, Math.min(rawY, nearest.y + nearest.height - height)),
+      width,
+      height,
+    };
+  }
+  const clamped = clampToScreen(rawX, rawY, width, height);
   return { x: clamped.x, y: clamped.y, width, height };
 }
 
@@ -642,8 +650,9 @@ function createWindow(): void {
     const newW = Math.max(38, Math.min(520, width));
     const newH = Math.max(38, height);
     if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2) return;
-    const targetBounds = getCenteredBounds(newW, newH);
-    const duration = newW >= oldW || newH >= oldH ? 320 : 280;
+    const expanding = newW > oldW || newH > oldH;
+    const targetBounds = getCenteredBounds(newW, newH, expanding);
+    const duration = expanding ? 320 : 280;
     if (!listWin.isVisible()) {
       clearListWindowBoundsAnimation();
       listWinModeAnimating = false;

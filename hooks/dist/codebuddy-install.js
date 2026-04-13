@@ -31,7 +31,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var codebuddy_install_exports = {};
 __export(codebuddy_install_exports, {
   CODEBUDDY_HOOK_EVENTS: () => CODEBUDDY_HOOK_EVENTS,
-  registerCodeBuddyHooks: () => registerCodeBuddyHooks
+  registerCodeBuddyHooks: () => registerCodeBuddyHooks,
+  unregisterCodeBuddyHooks: () => unregisterCodeBuddyHooks
 });
 module.exports = __toCommonJS(codebuddy_install_exports);
 var fs2 = __toESM(require("fs"));
@@ -274,6 +275,58 @@ function registerCodeBuddyHooks(options = {}) {
   if (!options.silent) console.log(`VigilCLI CodeBuddy hooks \u2192 ${settingsPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
   return { added, skipped, updated };
 }
+function unregisterCodeBuddyHooks(settingsPath) {
+  const filePath = settingsPath ?? path2.join(os2.homedir(), ".codebuddy", "settings.json");
+  let settings;
+  try {
+    settings = JSON.parse(fs2.readFileSync(filePath, "utf-8"));
+  } catch {
+    return 0;
+  }
+  const hooks = settings.hooks;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== "object") {
+        next.push(entry);
+        continue;
+      }
+      const topCmd = typeof entry.command === "string" ? entry.command : "";
+      if (topCmd.includes(MARKER)) {
+        removed++;
+        changed = true;
+        continue;
+      }
+      if (!Array.isArray(entry.hooks)) {
+        next.push(entry);
+        continue;
+      }
+      const filtered = entry.hooks.filter((h) => {
+        if (h.command?.includes(MARKER)) {
+          removed++;
+          changed = true;
+          return false;
+        }
+        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) {
+          removed++;
+          changed = true;
+          return false;
+        }
+        return true;
+      });
+      if (filtered.length !== entry.hooks.length) changed = true;
+      if (filtered.length === 0 && !topCmd) continue;
+      next.push(filtered.length === entry.hooks.length ? entry : { ...entry, hooks: filtered });
+    }
+    hooks[event] = next;
+  }
+  if (changed) writeJsonAtomic(filePath, settings);
+  return removed;
+}
 if (require.main === module) {
   try {
     registerCodeBuddyHooks({});
@@ -285,5 +338,6 @@ if (require.main === module) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CODEBUDDY_HOOK_EVENTS,
-  registerCodeBuddyHooks
+  registerCodeBuddyHooks,
+  unregisterCodeBuddyHooks
 });

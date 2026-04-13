@@ -311,7 +311,7 @@ function startHttpServer(): void {
               editor: null,
               pidChain: null,
               agentPid: null,
-              agentId: "claude-code",
+              agentId: existingSession?.agentId ?? "claude-code",
             });
 
             const permEntry: import("./types/ctx").PermissionEntry = {
@@ -362,7 +362,7 @@ function startHttpServer(): void {
             editor: null,
             pidChain: null,
             agentPid: null,
-            agentId: "claude-code",
+            agentId: existingSession?.agentId ?? "claude-code",
           });
 
           const abortHandler = () => {

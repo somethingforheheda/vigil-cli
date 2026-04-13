@@ -31,7 +31,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var codeflicker_install_exports = {};
 __export(codeflicker_install_exports, {
   CODEFLICKER_HOOK_EVENTS: () => CODEFLICKER_HOOK_EVENTS,
-  registerCodeflickerHooks: () => registerCodeflickerHooks
+  registerCodeflickerHooks: () => registerCodeflickerHooks,
+  unregisterCodeflickerHooks: () => unregisterCodeflickerHooks
 });
 module.exports = __toCommonJS(codeflicker_install_exports);
 var fs2 = __toESM(require("fs"));
@@ -48,8 +49,31 @@ var SERVER_PORTS = Array.from(
   { length: SERVER_PORT_COUNT },
   (_, i) => DEFAULT_SERVER_PORT + i
 );
+var PERMISSION_PATH = "/permission";
 var RUNTIME_CONFIG_PATH = path.join(os.homedir(), ".vigilcli", "runtime.json");
+function normalizePort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && SERVER_PORTS.includes(port) ? port : null;
+}
 var HOST_PREFIX_PATH = path.join(os.homedir(), ".claude", "hooks", "vigilcli-host-prefix");
+function readRuntimeConfig() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(RUNTIME_CONFIG_PATH, "utf8"));
+    if (!raw || typeof raw !== "object") return null;
+    const port = normalizePort(raw.port);
+    return port ? { port } : null;
+  } catch {
+    return null;
+  }
+}
+function readRuntimePort() {
+  const config = readRuntimeConfig();
+  return config ? config.port : null;
+}
+function buildPermissionUrl(port) {
+  const safePort = normalizePort(port) ?? DEFAULT_SERVER_PORT;
+  return `http://127.0.0.1:${safePort}${PERMISSION_PATH}`;
+}
 function resolveNodeBin(options = {}) {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") return "node";
@@ -92,6 +116,7 @@ function resolveNodeBin(options = {}) {
 }
 
 // hooks/src/codeflicker-install.ts
+var HTTP_MARKER = "/permission";
 var MARKER = "codeflicker-hook.js";
 var CODEFLICKER_HOOK_EVENTS = [
   "SessionStart",
@@ -174,6 +199,9 @@ function registerCodeflickerHooks(options = {}) {
   }
   const resolved = options.nodeBin !== void 0 ? options.nodeBin : resolveNodeBin();
   const nodeBin = resolved ?? extractExistingNodeBin(config, MARKER) ?? "node";
+  const permUrl = buildPermissionUrl(
+    Number.isInteger(options.port) ? options.port : readRuntimePort() ?? DEFAULT_SERVER_PORT
+  );
   if (!config.hooks || typeof config.hooks !== "object") config.hooks = {};
   const hooks = config.hooks;
   let added = 0, skipped = 0, updated = 0, changed = false;
@@ -213,17 +241,94 @@ function registerCodeflickerHooks(options = {}) {
       } else {
         skipped++;
       }
-      continue;
+    } else {
+      hooks[event].push({ matcher: "", hooks: [{ type: "command", command: desiredCommand }] });
+      added++;
+      changed = true;
     }
-    hooks[event].push({ matcher: "", hooks: [{ type: "command", command: desiredCommand }] });
-    added++;
-    changed = true;
+    if (event === "PermissionRequest") {
+      let httpFound = false;
+      for (const entry of hooks[event]) {
+        if (!entry || typeof entry !== "object") continue;
+        if (Array.isArray(entry.hooks)) {
+          for (const h of entry.hooks) {
+            if (!h || h.type !== "http" || typeof h.url !== "string" || !h.url.includes(HTTP_MARKER)) continue;
+            httpFound = true;
+            if (h.url !== permUrl) {
+              h.url = permUrl;
+              updated++;
+              changed = true;
+            } else {
+              skipped++;
+            }
+            break;
+          }
+        }
+        if (httpFound) break;
+      }
+      if (!httpFound) {
+        const firstEntry = hooks[event][0];
+        if (firstEntry && Array.isArray(firstEntry.hooks)) {
+          firstEntry.hooks.push({ type: "http", url: permUrl, timeout: 600 });
+        } else {
+          hooks[event].push({ matcher: "", hooks: [{ type: "http", url: permUrl, timeout: 600 }] });
+        }
+        added++;
+        changed = true;
+      }
+    }
   }
   if (added > 0 || changed) writeJsonAtomic(configPath, config);
   if (!options.silent) {
     console.log(`VigilCLI CodeflickerCLI hooks \u2192 ${configPath} (added: ${added}, updated: ${updated}, skipped: ${skipped})`);
   }
   return { added, skipped, updated };
+}
+function unregisterCodeflickerHooks(configPath) {
+  const filePath = configPath ?? path2.join(os2.homedir(), ".codeflicker", "config.json");
+  let config;
+  try {
+    config = JSON.parse(fs2.readFileSync(filePath, "utf-8"));
+  } catch {
+    return 0;
+  }
+  const hooks = config.hooks;
+  if (!hooks || typeof hooks !== "object") return 0;
+  let removed = 0, changed = false;
+  for (const event of Object.keys(hooks)) {
+    const arr = hooks[event];
+    if (!Array.isArray(arr)) continue;
+    const next = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== "object") {
+        next.push(entry);
+        continue;
+      }
+      if (!Array.isArray(entry.hooks)) {
+        next.push(entry);
+        continue;
+      }
+      const filtered = entry.hooks.filter((h) => {
+        if (h.command?.includes(MARKER)) {
+          removed++;
+          changed = true;
+          return false;
+        }
+        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) {
+          removed++;
+          changed = true;
+          return false;
+        }
+        return true;
+      });
+      if (filtered.length !== entry.hooks.length) changed = true;
+      if (filtered.length === 0) continue;
+      next.push({ ...entry, hooks: filtered });
+    }
+    hooks[event] = next;
+  }
+  if (changed) writeJsonAtomic(filePath, config);
+  return removed;
 }
 if (require.main === module) {
   try {
@@ -236,5 +341,6 @@ if (require.main === module) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CODEFLICKER_HOOK_EVENTS,
-  registerCodeflickerHooks
+  registerCodeflickerHooks,
+  unregisterCodeflickerHooks
 });
