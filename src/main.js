@@ -102,6 +102,25 @@ let listCollapsed = false;
 let sessionCap = 8;
 let cardPositions = null;
 let listWinModeAnimating = false;
+let listWinDragLockedSize = null;
+let listWinStableSize = null;
+const LIST_MIN_WIDTH = 38;
+const LIST_MAX_WIDTH = 520;
+function clampListWidth(width) {
+    return Math.max(LIST_MIN_WIDTH, Math.min(LIST_MAX_WIDTH, width));
+}
+function normalizeListBounds(bounds) {
+    return { ...bounds, width: clampListWidth(bounds.width) };
+}
+const VC_PANEL_DEBUG = true;
+function vcPanelDbg(...args) {
+    if (!VC_PANEL_DEBUG)
+        return;
+    try {
+        console.log("[VC-MAIN]", ...args);
+    }
+    catch { }
+}
 const PREFS_PATH = path.join(electron_1.app.getPath("userData"), "vigilcli-prefs.json");
 function loadPrefs() {
     try {
@@ -480,13 +499,14 @@ function animateListWindowBounds(toBounds, duration, options = {}) {
         return;
     clearListWindowBoundsAnimation();
     listWinModeAnimating = Boolean(options.modeTransition);
-    const fromBounds = listWin.getBounds();
-    const unchanged = Math.abs(toBounds.x - fromBounds.x) < 1 &&
-        Math.abs(toBounds.y - fromBounds.y) < 1 &&
-        Math.abs(toBounds.width - fromBounds.width) < 1 &&
-        Math.abs(toBounds.height - fromBounds.height) < 1;
+    const sanitizedToBounds = normalizeListBounds(toBounds);
+    const fromBounds = normalizeListBounds(listWin.getBounds());
+    const unchanged = Math.abs(sanitizedToBounds.x - fromBounds.x) < 1 &&
+        Math.abs(sanitizedToBounds.y - fromBounds.y) < 1 &&
+        Math.abs(sanitizedToBounds.width - fromBounds.width) < 1 &&
+        Math.abs(sanitizedToBounds.height - fromBounds.height) < 1;
     if (unchanged || duration <= 0) {
-        listWin.setBounds(toBounds);
+        listWin.setBounds(sanitizedToBounds);
         listWinModeAnimating = false;
         if (options.onDone)
             options.onDone();
@@ -505,10 +525,10 @@ function animateListWindowBounds(toBounds, duration, options = {}) {
         const rawT = Math.min((Date.now() - startedAt) / duration, 1);
         const t = easeOut(rawT);
         listWin.setBounds({
-            x: Math.round(fromBounds.x + (toBounds.x - fromBounds.x) * t),
-            y: Math.round(fromBounds.y + (toBounds.y - fromBounds.y) * t),
-            width: Math.round(fromBounds.width + (toBounds.width - fromBounds.width) * t),
-            height: Math.round(fromBounds.height + (toBounds.height - fromBounds.height) * t),
+            x: Math.round(fromBounds.x + (sanitizedToBounds.x - fromBounds.x) * t),
+            y: Math.round(fromBounds.y + (sanitizedToBounds.y - fromBounds.y) * t),
+            width: clampListWidth(Math.round(fromBounds.width + (sanitizedToBounds.width - fromBounds.width) * t)),
+            height: Math.round(fromBounds.height + (sanitizedToBounds.height - fromBounds.height) * t),
         });
         if (rawT >= 1) {
             listWinHeightAnim = null;
@@ -650,11 +670,15 @@ function createWindow() {
             return;
         if (listWinModeAnimating)
             return;
-        const { x, y, width, height: oldH } = listWin.getBounds();
+        const { x, y, width, height: oldH } = normalizeListBounds(listWin.getBounds());
+        const stableWidth = listWinStableSize?.width ?? width;
+        const stableHeight = listWinStableSize?.height ?? oldH;
         const newH = Math.max(30, contentHeight > 0 ? contentHeight : 30);
+        vcPanelDbg("LIST_CONTENT_HEIGHT", { contentHeight, oldH, newH, x, y, width, stableW: stableWidth, stableH: stableHeight });
         if (Math.abs(newH - oldH) < 2)
             return;
-        animateListWindowBounds({ x, y, width, height: newH }, 180);
+        listWinStableSize = { width: stableWidth, height: newH };
+        animateListWindowBounds({ x, y, width: stableWidth, height: newH }, 180);
     });
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.LIST_COLLAPSED, (_event, value) => {
         listCollapsed = value;
@@ -671,13 +695,35 @@ function createWindow() {
         if (!listWin || listWin.isDestroyed())
             return;
         const [x, y] = listWin.getPosition();
+        const currentBounds = listWin.getBounds();
+        const fallbackSize = listWinStableSize ?? {
+            width: clampListWidth(currentBounds.width),
+            height: Math.max(38, currentBounds.height),
+        };
+        if (!listWinDragLockedSize) {
+            listWinDragLockedSize = fallbackSize;
+        }
+        const { width, height } = listWinDragLockedSize ?? fallbackSize;
+        vcPanelDbg("move-window", { dx, dy, fromX: x, fromY: y, toX: x + dx, toY: y + dy, width, height, rawW: currentBounds.width, rawH: currentBounds.height, stableW: listWinStableSize?.width ?? null, stableH: listWinStableSize?.height ?? null });
+        if (currentBounds.width !== width || currentBounds.height !== height) {
+            listWin.setBounds({ x, y, width, height });
+        }
         listWin.setPosition(x + dx, y + dy);
     });
     // ── Drag end: edge-snap animation ──
     electron_1.ipcMain.on("snap-to-edge", (_event, { x, y }) => {
         if (!listWin || listWin.isDestroyed())
             return;
-        const { width, height } = listWin.getBounds();
+        const locked = listWinDragLockedSize;
+        listWinDragLockedSize = null;
+        if (locked) {
+            listWinStableSize = { width: locked.width, height: locked.height };
+            const bounds = listWin.getBounds();
+            if (bounds.width !== locked.width || bounds.height !== locked.height) {
+                listWin.setBounds({ x: bounds.x, y: bounds.y, width: locked.width, height: locked.height });
+            }
+        }
+        const { width, height } = listWinStableSize ?? listWin.getBounds();
         const mid = { x: x + Math.floor(width / 2), y: y + Math.floor(height / 2) };
         const display = electron_1.screen.getDisplayNearestPoint(mid);
         const { x: wx, y: wy, width: dw, height: dh } = display.workArea;
@@ -700,9 +746,12 @@ function createWindow() {
     electron_1.ipcMain.on(ipc_channels_1.IpcChannels.WINDOW_SIZE, (_event, { width, height }) => {
         if (!listWin || listWin.isDestroyed())
             return;
+        listWinDragLockedSize = null;
         const { width: oldW, height: oldH } = listWin.getBounds();
-        const newW = Math.max(38, Math.min(520, width));
+        const newW = clampListWidth(width);
         const newH = Math.max(38, height);
+        listWinStableSize = { width: newW, height: newH };
+        vcPanelDbg("WINDOW_SIZE", { reqW: width, reqH: height, oldW, oldH, newW, newH, modeAnimating: listWinModeAnimating });
         if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2)
             return;
         const expanding = newW > oldW || newH > oldH;

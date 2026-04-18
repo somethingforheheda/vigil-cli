@@ -60,6 +60,19 @@ let _orbOuter = 46;
 
 // ── Drag state ──
 let dragging = false, dragX = 0, dragY = 0;
+let panelHeightSyncBlockedUntil = 0;
+const PANEL_HEIGHT_SYNC_RESUME_DELAY_MS = 320;
+function blockPanelHeightSync(ms = PANEL_HEIGHT_SYNC_RESUME_DELAY_MS) {
+  panelHeightSyncBlockedUntil = Math.max(panelHeightSyncBlockedUntil, Date.now() + ms);
+}
+function isPanelHeightSyncBlocked() {
+  return dragging || Date.now() < panelHeightSyncBlockedUntil;
+}
+const __VC_PANEL_DEBUG = true;
+function __vcDbg(...args) {
+  if (!__VC_PANEL_DEBUG) return;
+  try { console.log("[VC-RENDERER]", ...args); } catch {}
+}
 
 // ═══════════════════════════════════════════════════════
 // Utilities
@@ -135,15 +148,32 @@ function _isTransitioning() {
 }
 
 function _syncPanelHeight() {
-  if (currentMode !== "panel" || _isTransitioning()) return;
+  if (currentMode !== "panel" || _isTransitioning() || isPanelHeightSyncBlocked()) return;
   requestAnimationFrame(() => {
-    if (currentMode !== "panel" || _isTransitioning()) return;
-    window.electronAPI.reportListHeight(panelHeight());
+    if (currentMode !== "panel" || _isTransitioning() || isPanelHeightSyncBlocked()) return;
+    const h = panelHeight();
+    __vcDbg("reportListHeight", {
+      h,
+      mode: currentMode,
+      phase: document.body.dataset.phase,
+      content: document.body.dataset.content,
+      dragging,
+      blockedUntil: panelHeightSyncBlockedUntil,
+      listScrollHeight: document.getElementById("slist")?.scrollHeight ?? null,
+      capBarHeight: document.getElementById("cap-bar")?.offsetHeight ?? null,
+    });
+    window.electronAPI.reportListHeight(h);
   });
 }
 
 function setMode(mode) {
   if (currentMode === mode) return;
+  __vcDbg("setMode", {
+    from: currentMode,
+    to: mode,
+    phase: document.body.dataset.phase,
+    content: document.body.dataset.content,
+  });
   currentMode = mode;
 
   const orbEl  = document.getElementById("orb");
@@ -157,6 +187,7 @@ function setMode(mode) {
     document.body.dataset.mode = "panel";
     document.body.dataset.phase = "collapsing";
     document.body.dataset.content = "hidden";
+    __vcDbg("reportWindowSize orb collapse", { width: _orbOuter, height: _orbOuter, token });
     window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
 
     _modeTransitionTimer = setTimeout(() => {
@@ -187,7 +218,9 @@ function setMode(mode) {
     requestAnimationFrame(() => {
       if (token !== _modeTransitionToken) return;
       document.body.dataset.content = "visible";
-      window.electronAPI.reportWindowSize(340, panelHeight());
+      const panelH = panelHeight();
+      __vcDbg("reportWindowSize panel", { width: 340, height: panelH, token });
+      window.electronAPI.reportWindowSize(340, panelH);
     });
 
     _modeTransitionTimer = setTimeout(() => {
@@ -482,6 +515,7 @@ document.getElementById("cap-bar").addEventListener("dblclick", (e) => {
 function onDragStart(e) {
   if (e.button !== 0) return;
   dragging = false; dragX = e.screenX; dragY = e.screenY;
+  __vcDbg("dragStart", { screenX: e.screenX, screenY: e.screenY, mode: currentMode });
 }
 document.getElementById("orb").addEventListener("mousedown", onDragStart);
 document.getElementById("cap-bar").addEventListener("mousedown", (e) => {
@@ -493,13 +527,20 @@ document.addEventListener("mousemove", (e) => {
   const dx = e.screenX - dragX, dy = e.screenY - dragY;
   if (dx || dy) {
     dragging = true; dragX = e.screenX; dragY = e.screenY;
+    blockPanelHeightSync();
+    __vcDbg("dragMove", { dx, dy, screenX: e.screenX, screenY: e.screenY, mode: currentMode });
     window.electronAPI.dragWindow(dx, dy);
   }
 });
 document.addEventListener("mouseup", () => {
   const was = dragging;
   dragging = false; dragX = 0; dragY = 0;
-  if (was) window.electronAPI.snapToEdge(window.screenX, window.screenY);
+  if (was) blockPanelHeightSync();
+  __vcDbg("dragEnd", { wasDragging: was, windowScreenX: window.screenX, windowScreenY: window.screenY, mode: currentMode });
+  if (was) {
+    window.electronAPI.snapToEdge(window.screenX, window.screenY);
+    setTimeout(() => _syncPanelHeight(), PANEL_HEIGHT_SYNC_RESUME_DELAY_MS + 30);
+  }
 });
 
 // ── ORB double-click → panel ──
@@ -522,7 +563,10 @@ window.electronAPI.onApplyPrefs(({ theme, fontSize, orbSize }) => {
     document.documentElement.style.setProperty("--orb-outer", s.outer + "px");
     document.documentElement.style.setProperty("--orb-inner", s.inner + "px");
     document.documentElement.style.setProperty("--orb-scale", String(s.scale));
-    if (currentMode === "orb") window.electronAPI.reportWindowSize(s.outer, s.outer);
+    if (currentMode === "orb") {
+      __vcDbg("reportWindowSize orb applyPrefs", { width: s.outer, height: s.outer });
+      window.electronAPI.reportWindowSize(s.outer, s.outer);
+    }
   }
 });
 
@@ -552,4 +596,5 @@ window.electronAPI.onPlaySound((name) => {
 });
 
 // ── Initial: tell main to resize to ORB ──
+__vcDbg("reportWindowSize initial orb", { width: _orbOuter, height: _orbOuter });
 window.electronAPI.reportWindowSize(_orbOuter, _orbOuter);
