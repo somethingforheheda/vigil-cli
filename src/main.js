@@ -112,15 +112,6 @@ function clampListWidth(width) {
 function normalizeListBounds(bounds) {
     return { ...bounds, width: clampListWidth(bounds.width) };
 }
-const VC_PANEL_DEBUG = true;
-function vcPanelDbg(...args) {
-    if (!VC_PANEL_DEBUG)
-        return;
-    try {
-        console.log("[VC-MAIN]", ...args);
-    }
-    catch { }
-}
 const PREFS_PATH = path.join(electron_1.app.getPath("userData"), "vigilcli-prefs.json");
 function loadPrefs() {
     try {
@@ -672,9 +663,7 @@ function createWindow() {
             return;
         const { x, y, width, height: oldH } = normalizeListBounds(listWin.getBounds());
         const stableWidth = listWinStableSize?.width ?? width;
-        const stableHeight = listWinStableSize?.height ?? oldH;
         const newH = Math.max(30, contentHeight > 0 ? contentHeight : 30);
-        vcPanelDbg("LIST_CONTENT_HEIGHT", { contentHeight, oldH, newH, x, y, width, stableW: stableWidth, stableH: stableHeight });
         if (Math.abs(newH - oldH) < 2)
             return;
         listWinStableSize = { width: stableWidth, height: newH };
@@ -704,7 +693,6 @@ function createWindow() {
             listWinDragLockedSize = fallbackSize;
         }
         const { width, height } = listWinDragLockedSize ?? fallbackSize;
-        vcPanelDbg("move-window", { dx, dy, fromX: x, fromY: y, toX: x + dx, toY: y + dy, width, height, rawW: currentBounds.width, rawH: currentBounds.height, stableW: listWinStableSize?.width ?? null, stableH: listWinStableSize?.height ?? null });
         if (currentBounds.width !== width || currentBounds.height !== height) {
             listWin.setBounds({ x, y, width, height });
         }
@@ -751,7 +739,6 @@ function createWindow() {
         const newW = clampListWidth(width);
         const newH = Math.max(38, height);
         listWinStableSize = { width: newW, height: newH };
-        vcPanelDbg("WINDOW_SIZE", { reqW: width, reqH: height, oldW, oldH, newW, newH, modeAnimating: listWinModeAnimating });
         if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2)
             return;
         const expanding = newW > oldW || newH > oldH;

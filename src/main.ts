@@ -83,11 +83,6 @@ function clampListWidth(width: number): number {
 function normalizeListBounds(bounds: Electron.Rectangle): Electron.Rectangle {
   return { ...bounds, width: clampListWidth(bounds.width) };
 }
-const VC_PANEL_DEBUG = true;
-function vcPanelDbg(...args: unknown[]): void {
-  if (!VC_PANEL_DEBUG) return;
-  try { console.log("[VC-MAIN]", ...args); } catch {}
-}
 
 const PREFS_PATH = path.join(app.getPath("userData"), "vigilcli-prefs.json");
 
@@ -620,9 +615,7 @@ function createWindow(): void {
     if (listWinModeAnimating) return;
     const { x, y, width, height: oldH } = normalizeListBounds(listWin.getBounds());
     const stableWidth = listWinStableSize?.width ?? width;
-    const stableHeight = listWinStableSize?.height ?? oldH;
     const newH = Math.max(30, contentHeight > 0 ? contentHeight : 30);
-    vcPanelDbg("LIST_CONTENT_HEIGHT", { contentHeight, oldH, newH, x, y, width, stableW: stableWidth, stableH: stableHeight });
     if (Math.abs(newH - oldH) < 2) return;
     listWinStableSize = { width: stableWidth, height: newH };
     animateListWindowBounds({ x, y, width: stableWidth, height: newH }, 180);
@@ -652,7 +645,6 @@ function createWindow(): void {
       listWinDragLockedSize = fallbackSize;
     }
     const { width, height } = listWinDragLockedSize ?? fallbackSize;
-    vcPanelDbg("move-window", { dx, dy, fromX: x, fromY: y, toX: x + dx, toY: y + dy, width, height, rawW: currentBounds.width, rawH: currentBounds.height, stableW: listWinStableSize?.width ?? null, stableH: listWinStableSize?.height ?? null });
     if (currentBounds.width !== width || currentBounds.height !== height) {
       listWin.setBounds({ x, y, width, height });
     }
@@ -693,7 +685,6 @@ function createWindow(): void {
     const newW = clampListWidth(width);
     const newH = Math.max(38, height);
     listWinStableSize = { width: newW, height: newH };
-    vcPanelDbg("WINDOW_SIZE", { reqW: width, reqH: height, oldW, oldH, newW, newH, modeAnimating: listWinModeAnimating });
     if (Math.abs(newW - oldW) < 2 && Math.abs(newH - oldH) < 2) return;
     const expanding = newW > oldW || newH > oldH;
     const targetBounds = getCenteredBounds(newW, newH, expanding);
