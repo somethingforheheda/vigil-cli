@@ -18,6 +18,8 @@ const isWin = process.platform === "win32";
 export function initPermission(ctx: PermContext): {
   showPermissionBubble(permEntry: PermissionEntry): void;
   resolvePermissionEntry(permEntry: PermissionEntry, behavior: string, message?: string): void;
+  dismissPermissionEntry(permEntry: PermissionEntry, reason: string): void;
+  sendNoDecision(res: import("http").ServerResponse): void;
   sendPermissionResponse(
     res: import("http").ServerResponse,
     decisionOrBehavior: string | { behavior: string; message?: string; updatedPermissions?: unknown[] },
@@ -44,15 +46,31 @@ export function initPermission(ctx: PermContext): {
     "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskStop", "TaskOutput",
   ]);
 
-  // ── Permission hotkeys (Ctrl+Shift+Y = Allow, Ctrl+Shift+N = Deny) ──
-  const HOTKEY_ALLOW = "CommandOrControl+Shift+Y";
-  const HOTKEY_DENY  = "CommandOrControl+Shift+N";
+  // ── Permission hotkeys (Ctrl+Alt+Shift+Y = Allow, Ctrl+Alt+Shift+N = Deny) ──
+  // Alt is included so we don't hijack common app shortcuts while a request is
+  // pending (Cmd+Shift+N = incognito window / new folder).
+  const HOTKEY_ALLOW = "CommandOrControl+Alt+Shift+Y";
+  const HOTKEY_DENY  = "CommandOrControl+Alt+Shift+N";
+  // A bubble must have been on screen this long before a hotkey can act on it,
+  // so a request that pops up mid-keypress is never the one approved.
+  const HOTKEY_MIN_VISIBLE_MS = 800;
   let hotkeysRegistered = false;
+  const shownAt = new WeakMap<PermissionEntry, number>();
 
   function getActionablePermissions(): PermissionEntry[] {
     return pendingPermissions.filter(
       (p) => !p.isElicitation && !p.isCodexNotify && p.toolName !== "ExitPlanMode"
     );
+  }
+
+  function getHotkeyTarget(): PermissionEntry | null {
+    const now = Date.now();
+    const eligible = getActionablePermissions().filter((p) => {
+      const t = shownAt.get(p);
+      return t !== undefined && now - t >= HOTKEY_MIN_VISIBLE_MS
+        && !!p.bubble && !p.bubble.isDestroyed() && p.bubble.isVisible();
+    });
+    return eligible.length ? eligible[eligible.length - 1] : null;
   }
 
   function syncPermissionShortcuts(): void {
@@ -73,17 +91,13 @@ export function initPermission(ctx: PermContext): {
   }
 
   function hotkeyAllow(): void {
-    const targets = getActionablePermissions();
-    if (!targets.length) return;
-    const perm = targets[targets.length - 1]; // newest
-    resolvePermissionEntry(perm, "allow");
+    const perm = getHotkeyTarget();
+    if (perm) resolvePermissionEntry(perm, "allow");
   }
 
   function hotkeyDeny(): void {
-    const targets = getActionablePermissions();
-    if (!targets.length) return;
-    const perm = targets[targets.length - 1]; // newest
-    resolvePermissionEntry(perm, "deny", "Denied via hotkey");
+    const perm = getHotkeyTarget();
+    if (perm) resolvePermissionEntry(perm, "deny", "Denied via hotkey");
   }
 
   // Fallback height before renderer reports actual measurement
@@ -291,7 +305,6 @@ export function initPermission(ctx: PermContext): {
 
     // Minimum display time: if bubble just appeared and dismiss is automatic
     // (client disconnect / terminal answer), delay so user can see it briefly
-    const MIN_BUBBLE_DISPLAY_MS = 2000;
     const age = Date.now() - (permEntry.createdAt || 0);
     const isAutoResolve = message === "Client disconnected";
     if (isAutoResolve && permEntry.bubble && age < MIN_BUBBLE_DISPLAY_MS && !permEntry._delayedResolve) {
@@ -309,11 +322,17 @@ export function initPermission(ctx: PermContext): {
     destroyBubbleEntry(permEntry);
 
     // Guard: client may have disconnected
-    if (!res || res.writableEnded || (res as unknown as { destroyed: boolean }).destroyed) return;
+    if (!res || res.writableEnded || (res as unknown as { destroyed: boolean }).destroyed) {
+      ctx.onPermissionResolved(permEntry.sessionId, "none");
+      return;
+    }
 
     if (permEntry.isElicitation) {
-      sendPermissionResponse(res, "deny", undefined, "Elicitation");
+      // AskUserQuestion must be answered in the terminal: return "no decision"
+      // so Claude Code shows its own prompt instead of rejecting the tool.
+      sendNoDecision(res);
       ctx.focusTerminalForSession(permEntry.sessionId);
+      ctx.onPermissionResolved(permEntry.sessionId, "none");
       return;
     }
 
@@ -321,11 +340,43 @@ export function initPermission(ctx: PermContext): {
       behavior: behavior === "deny" ? "deny" : "allow",
     };
     if (behavior === "deny" && message) decision.message = message;
-    if (permEntry.resolvedSuggestion) {
+    // Codex fails closed on updatedPermissions — never send it there
+    if (permEntry.resolvedSuggestion && permEntry.agentId !== "codex") {
       decision.updatedPermissions = [permEntry.resolvedSuggestion];
     }
 
     sendPermissionResponse(res, decision);
+    ctx.onPermissionResolved(permEntry.sessionId, decision.behavior === "allow" ? "allow" : "deny");
+  }
+
+  /**
+   * Drop a pending request without deciding: the bubble closes and Claude Code
+   * falls back to its own terminal prompt (or has already moved on). Used when
+   * the request was answered elsewhere — sending "deny" there would reject a
+   * tool call the user never rejected.
+   */
+  function dismissPermissionEntry(permEntry: PermissionEntry, reason: string): void {
+    if (permEntry.isCodexNotify) { dismissCodexNotify(permEntry); return; }
+    const idx = pendingPermissions.indexOf(permEntry);
+    if (idx === -1) return;
+    permLog(`dismiss without decision: tool=${permEntry.toolName} reason=${reason}`);
+    if (permEntry._delayTimer) clearTimeout(permEntry._delayTimer);
+    pendingPermissions.splice(idx, 1);
+    const { res, abortHandler } = permEntry;
+    if (abortHandler && res) res.removeListener("close", abortHandler);
+    destroyBubbleEntry(permEntry);
+    if (res && !res.writableEnded && !(res as unknown as { destroyed: boolean }).destroyed) sendNoDecision(res);
+    ctx.onPermissionResolved(permEntry.sessionId, "none");
+  }
+
+  /** 2xx with empty JSON: Claude Code treats it as "hook made no decision". */
+  function sendNoDecision(res: import("http").ServerResponse): void {
+    permLog("response: {} (no decision)");
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      [VIGILCLI_SERVER_HEADER]: VIGILCLI_SERVER_ID,
+    });
+    res.end("{}");
   }
 
   function permLog(msg: string): void {
@@ -373,6 +424,7 @@ export function initPermission(ctx: PermContext): {
       // First time we know the real height: show the bubble now at correct size
       if (perm.bubble && !perm.bubble.isDestroyed() && !perm.bubble.isVisible()) {
         perm.bubble.showInactive();
+        shownAt.set(perm, Date.now());
         if (isLinux) perm.bubble.setSkipTaskbar(true);
         ctx.reapplyMacVisibility();
       }
@@ -426,6 +478,7 @@ export function initPermission(ctx: PermContext): {
   }
 
   const CODEX_NOTIFY_EXPIRE_MS = 30000;
+  const MIN_BUBBLE_DISPLAY_MS = 2000;
 
   function showCodexNotifyBubble({ sessionId, command }: { sessionId: string; command?: string }): void {
     if (ctx.dndEnabled || ctx.hideBubbles) {
@@ -484,16 +537,18 @@ export function initPermission(ctx: PermContext): {
       try { globalShortcut.unregister(HOTKEY_DENY);  } catch { /* ignore */ }
       hotkeysRegistered = false;
     }
-    // Clean up all pending permission requests — send explicit deny so Claude Code doesn't hang
+    // Answer every pending request with "no decision" so Claude Code neither
+    // hangs nor rejects the tool — it falls back to its terminal prompt.
     for (const perm of [...pendingPermissions]) {
-      if (perm._delayTimer) clearTimeout(perm._delayTimer);
-      resolvePermissionEntry(perm, "deny", "VigilCLI is quitting");
+      dismissPermissionEntry(perm, "VigilCLI is quitting");
     }
   }
 
   return {
     showPermissionBubble,
     resolvePermissionEntry,
+    dismissPermissionEntry,
+    sendNoDecision,
     sendPermissionResponse,
     stackBubbles,
     permLog,

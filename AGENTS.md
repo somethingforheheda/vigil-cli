@@ -1,33 +1,45 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents (Claude Code, Codex, etc.) when working with code in this repository.
 
 ## Build Commands
 
 ```bash
 # Compile TypeScript (hooks must be built first)
 npm run build:hooks          # esbuild → hooks/dist/
-npm run build:ts             # tsc → src/*.js, agents/*.js
+npm run build:ts             # tsc → src/*.js, agents/*.js, test/*.js, hooks/src/server-config.js
 
-# Always run in this order (build:ts depends on hooks/dist/server-config.d.ts)
-npm run build:hooks && npm run build:ts
+# Both, in the right order (build:ts depends on hooks/dist/server-config.d.ts)
+npm run build                # alias of: npm run build:all-ts  (= build:hooks && build:ts)
 
-# Dev mode (runs via tsx, no compilation needed)
+# Type-check only (no emit)
+npm run typecheck
+
+# Run the app. By default this loads the *compiled* src/main.js — rebuild after editing .ts.
 npm start
+# Dev mode: run the .ts sources directly via tsx (no compilation needed)
+VIGILCLI_DEV_TS=1 npm start
 
 # Package installers
-npx electron-builder --mac --arm64      # macOS arm64 only (x64 has zip extraction issues)
-npx electron-builder --win --x64        # Windows x64
-npx electron-builder --linux            # Linux AppImage + deb (requires no snapcraft)
+npm run build:mac                       # macOS arm64 DMG only (x64 has zip extraction issues)
+npm run build:win                       # Windows x64 NSIS
+npm run build:linux                     # Linux AppImage + deb (requires no snapcraft)
 
 # Run tests
 npm test
 ```
 
+## CI
+
+`.github/workflows/ci.yml` runs on every push / PR (ubuntu-latest + macos-latest, Node 22):
+`npm ci` → `npm run build:hooks` → `tsc --noEmit` → `npm test` → `npm run build:all-ts` and
+`git diff --exit-code` on `src agents hooks test`. The last step fails if committed `.js`
+output is stale, so **always commit the regenerated `.js` together with `.ts` changes**.
+
 ## Release Process
 
 1. Bump `version` in `package.json`
-2. `npm run build:hooks && npm run build:ts`
+2. `npm run build` (= `build:hooks && build:ts`)
 3. Build packages (see above)
 4. Generate `latest-mac.yml` manually if mac build was interrupted:
    ```bash
@@ -44,7 +56,7 @@ npm test
 ## Architecture
 
 ### Entry Point
-`src/main-entry.js` is the Electron `main` field. In dev it loads `main.ts` via `tsx`; in packaged builds it falls back to compiled `main.js`.
+`src/main-entry.js` is the Electron `main` field. By default (including `npm start` and packaged builds) it loads the compiled `main.js`; only when `VIGILCLI_DEV_TS=1` is set does it register `tsx` and load `main.ts` directly. Packaged builds exclude `.ts` sources from the asar.
 
 ### Main Process (`src/main.ts`)
 Orchestrates everything. Initialises all sub-modules with a shared context object (`ctx`), creates the two Electron windows, and sets up IPC.
@@ -71,14 +83,16 @@ Preload scripts (`src/preload-list.ts`, `src/preload-bubble.ts`) expose a safe `
 Each file is an `AgentConfig` that describes how to detect and monitor one AI tool:
 - `logEventMap`: maps JSONL `type:subtype` keys → `AgentState`
 - `processNames`: used for process scanning
-- `eventSource`: `"http-hook"` (Codex) or `"log-poll"` (Codex)
+- `eventSource`: `"hook"` (Claude Code, Gemini CLI, Cursor Agent, Copilot CLI, CodeBuddy, CodeflickerCLI) or `"log-poll"` (Codex fallback when its native hooks aren't trusted)
 
-`codex-log-monitor.ts` polls `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` every 1.5s and reads `~/.codex/session_index.jsonl` incrementally for session `thread_name`.
+Codex is primarily driven by native hooks (`hooks/src/codex-hook.ts` + `codex-install.ts` → `~/.codex/hooks.json`). Codex only runs hooks the user trusted via `/hooks`, keyed by a hash of the hook definition — keep the generated entries byte-stable (no port/token/version in them) or every user has to re-trust. `codex-log-monitor.ts` is the fallback: it polls `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` and reads `~/.codex/session_index.jsonl` for session titles; `main.ts` drops its events for sessions already reported by hooks (both use the id `codex:<session_meta.payload.id>`).
 
 ### Hook Scripts (`hooks/src/` → `hooks/dist/`)
-esbuild-bundled scripts that AI tools invoke as hooks. They POST state events to VigilCLI's local HTTP server (`~/.vigilcli/runtime.json` stores the active port). `hooks/dist/` is in `.gitignore` but force-tracked in git.
+esbuild-bundled scripts that AI tools invoke as hooks. They POST state events to VigilCLI's local HTTP server (`~/.vigilcli/runtime.json` stores the active port) with the `x-vigilcli-token` header (`~/.vigilcli/auth-token`, or `VIGILCLI_TOKEN` in remote mode).
 
-`hooks/dist/server-config.d.ts` is a manually maintained type stub required for `tsc` to compile without errors.
+`permission-hook.js` is the command PermissionRequest hook for Claude Code and Codex: it POSTs to `/permission` with a random `x-vigilcli-nonce` and only honors the response if `x-vigilcli-proof` equals `HMAC-SHA256(token, nonce)`; any failure prints nothing (= no decision, the agent asks in the terminal). Codex rejects `updatedPermissions`, so Codex entries never get rule suggestions. `hooks/dist/` is committed build output (`.gitignore` only ignores the root `/dist/` electron-builder output).
+
+`hooks/dist/server-config.d.ts` is generated by `scripts/build-hooks.mjs` (declaration-only emit) so `src/` can import the hook helpers with types.
 
 ### State Machine (`src/state.ts`)
 - `sessions`: `Map<sessionId, SessionRecord>` — the source of truth
@@ -94,15 +108,15 @@ Listens on `DEFAULT_SERVER_PORT` (23333) + up to 4 fallback ports. Exposes:
 
 ## TypeScript / JS Dual Files
 
-Every `.ts` file in `src/` and `agents/` has a corresponding compiled `.js`. The `.js` files are committed to git (Electron loads them directly in packaged builds). After editing any `.ts` file, run `npm run build:ts` to regenerate the `.js`.
+Every `.ts` file in `src/` and `agents/` has a corresponding compiled `.js`. The `.js` files are committed to git (Electron loads them directly in packaged builds). After editing any `.ts` file, run `npm run build` to regenerate the `.js` and commit both (CI checks they are in sync).
 
 The `src/bubble.html` and `src/list.html` renderer files are plain HTML/JS — they are **not** compiled from TypeScript.
 
 ## Related Repositories
 
-| 项目 | 本地路径 |
-|------|---------|
-| Codex CLI | `/Users/wangning/Documents/vscodefile/codex` |
-| Codex | `/Users/wangning/kuaishouProject1/Codex-main` |
+| Project | Upstream |
+|---------|----------|
+| Codex CLI | https://github.com/openai/codex |
+| Claude Code (hooks reference) | https://docs.anthropic.com/en/docs/claude-code/hooks |
 
-当需要对照 Codex 或 Codex 的源码实现（如 hook 协议、日志格式、session 结构等）时，使用上述路径查阅。
+Consult these when you need to check the hook protocol, JSONL log format, session structure, etc.

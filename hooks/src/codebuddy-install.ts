@@ -3,17 +3,40 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { resolveNodeBin, buildPermissionUrl, DEFAULT_SERVER_PORT, readRuntimePort } from "./server-config";
+import {
+  AUTH_HEADER,
+  buildPermissionUrl,
+  DEFAULT_SERVER_PORT,
+  getOrCreateAuthToken,
+  isVigilCLIPermissionUrl,
+  readRuntimePort,
+  resolveNodeBin,
+} from "./server-config";
+import { resolveHookScriptPath, writeJsonAtomic } from "./shared/install-utils";
 
 const MARKER = "codebuddy-hook.js";
-const HTTP_MARKER = "/permission";
 
 const CODEBUDDY_HOOK_EVENTS = [
   "SessionStart", "SessionEnd", "UserPromptSubmit",
   "PreToolUse", "PostToolUse", "Stop", "Notification", "PreCompact",
 ];
 
-type HookEntry = { command?: string; hooks?: Array<{ command?: string; type?: string; url?: string }>; matcher?: string; type?: string; url?: string };
+type HttpHookFields = { type?: string; url?: string; headers?: Record<string, unknown>; timeout?: number };
+type HookEntry = { command?: string; hooks?: Array<{ command?: string } & HttpHookFields>; matcher?: string } & HttpHookFields;
+
+/** Bring an owned http hook to the desired url/auth header. Returns true if modified. */
+function applyPermissionHook(hook: HttpHookFields, url: string, authToken: string | null): boolean {
+  let changed = false;
+  if (hook.url !== url) { hook.url = url; changed = true; }
+  if (authToken) {
+    const headers = hook.headers && typeof hook.headers === "object" && !Array.isArray(hook.headers) ? hook.headers : null;
+    if (!headers || headers[AUTH_HEADER] !== authToken) {
+      hook.headers = { ...(headers ?? {}), [AUTH_HEADER]: authToken };
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 function extractExistingNodeBin(settings: Record<string, unknown>, marker: string): string | null {
   if (!settings?.hooks) return null;
@@ -41,24 +64,13 @@ function extractExistingNodeBin(settings: Record<string, unknown>, marker: strin
   return null;
 }
 
-function writeJsonAtomic(filePath: string, data: unknown): void {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmpPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch {}
-    throw err;
-  }
-}
-
 interface RegisterCodeBuddyHooksOptions {
   silent?: boolean;
   settingsPath?: string;
   nodeBin?: string | null;
+  port?: number;
+  /** undefined → getOrCreateAuthToken(); null → no auth header */
+  authToken?: string | null;
 }
 
 export function registerCodeBuddyHooks(options: RegisterCodeBuddyHooksOptions = {}): { added: number; skipped: number; updated: number } {
@@ -69,8 +81,7 @@ export function registerCodeBuddyHooks(options: RegisterCodeBuddyHooksOptions = 
     return { added: 0, skipped: 0, updated: 0 };
   }
 
-  let hookScript = path.resolve(__dirname, "..", "dist", "codebuddy-hook.js").replace(/\\/g, "/");
-  hookScript = hookScript.replace("app.asar/", "app.asar.unpacked/");
+  const hookScript = resolveHookScriptPath("codebuddy-hook.js", __dirname);
 
   let settings: Record<string, unknown> = {};
   try {
@@ -111,29 +122,35 @@ export function registerCodeBuddyHooks(options: RegisterCodeBuddyHooksOptions = 
     added++; changed = true;
   }
 
-  // PermissionRequest HTTP hook
-  const hookPort = readRuntimePort() ?? DEFAULT_SERVER_PORT;
+  // PermissionRequest HTTP hook (only entries we own: ?app=vigilcli or the legacy exact URL)
+  const hookPort = Number.isInteger(options.port) ? options.port! : (readRuntimePort() ?? DEFAULT_SERVER_PORT);
   const permissionUrl = buildPermissionUrl(hookPort);
+  let authToken: string | null = null;
+  if (options.authToken !== undefined) authToken = options.authToken;
+  else { try { authToken = getOrCreateAuthToken(); } catch {} }
   const permEvent = "PermissionRequest";
   if (!Array.isArray(hooks[permEvent])) { hooks[permEvent] = []; changed = true; }
   let permFound = false;
   for (const entry of hooks[permEvent]) {
+    if (!entry || typeof entry !== "object") continue;
     if (Array.isArray(entry.hooks)) {
       for (const h of entry.hooks) {
-        if (!h || h.type !== "http" || typeof h.url !== "string" || !h.url.includes(HTTP_MARKER)) continue;
+        if (!h || h.type !== "http" || !isVigilCLIPermissionUrl(h.url)) continue;
         permFound = true;
-        if (h.url !== permissionUrl) { h.url = permissionUrl; updated++; changed = true; }
+        if (applyPermissionHook(h, permissionUrl, authToken)) { updated++; changed = true; }
         break;
       }
     }
-    if (!permFound && entry.type === "http" && typeof entry.url === "string" && entry.url.includes(HTTP_MARKER)) {
+    if (!permFound && entry.type === "http" && isVigilCLIPermissionUrl(entry.url)) {
       permFound = true;
-      if (entry.url !== permissionUrl) { entry.url = permissionUrl; updated++; changed = true; }
+      if (applyPermissionHook(entry, permissionUrl, authToken)) { updated++; changed = true; }
     }
     if (permFound) break;
   }
   if (!permFound) {
-    hooks[permEvent].push({ matcher: "", hooks: [{ type: "http", url: permissionUrl, timeout: 600 } as unknown as { command?: string; type?: string; url?: string }] });
+    const permHook: HttpHookFields = { type: "http", url: permissionUrl, timeout: 600 };
+    if (authToken) permHook.headers = { [AUTH_HEADER]: authToken };
+    hooks[permEvent].push({ matcher: "", hooks: [permHook] });
     added++; changed = true;
   }
 
@@ -160,10 +177,12 @@ export function unregisterCodeBuddyHooks(settingsPath?: string): number {
       if (!entry || typeof entry !== "object") { next.push(entry); continue; }
       const topCmd = typeof entry.command === "string" ? entry.command : "";
       if (topCmd.includes(MARKER)) { removed++; changed = true; continue; }
+      if (entry.type === "http" && isVigilCLIPermissionUrl(entry.url)) { removed++; changed = true; continue; }
       if (!Array.isArray(entry.hooks)) { next.push(entry); continue; }
       const filtered = entry.hooks.filter((h) => {
-        if (h.command?.includes(MARKER)) { removed++; changed = true; return false; }
-        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) { removed++; changed = true; return false; }
+        if (!h || typeof h !== "object") return true;
+        if (typeof h.command === "string" && h.command.includes(MARKER)) { removed++; changed = true; return false; }
+        if (h.type === "http" && isVigilCLIPermissionUrl(h.url)) { removed++; changed = true; return false; }
         return true;
       });
       if (filtered.length !== entry.hooks.length) changed = true;

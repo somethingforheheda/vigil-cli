@@ -1,7 +1,9 @@
 node_modules/
 out/
-dist/
+# electron-builder output (root only — hooks/dist/ is committed build output)
+/dist/
 *.log
 .DS_Store
 CLAUDE.md
 *.mov
+.idea/

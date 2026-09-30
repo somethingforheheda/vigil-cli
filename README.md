@@ -36,7 +36,7 @@ VigilCLI sits in your menu bar and shows you everything happening across all you
 
 ### Session Monitor
 - **Real-time session list** — floating card panel showing every active AI session with its status (running / waiting / error / notification), working directory, elapsed time, and sub-agent count
-- **Click to focus** — click any card to jump straight to the matching terminal window (VS Code / Cursor terminal supported on macOS)
+- **Click to focus** — click any card to jump straight to the matching terminal window; inside VS Code / Cursor, the bundled *VigilCLI Terminal Focus* extension (auto-installed into `~/.vscode/extensions` / `~/.cursor/extensions`) also switches to the right integrated-terminal tab
 - **Dynamic height** — panel shrinks to a compact bar when idle, expands smoothly as sessions accumulate (up to 5 cards, then scrollable)
 
 ### Permission Bubbles
@@ -45,8 +45,11 @@ VigilCLI sits in your menu bar and shows you everything happening across all you
 - **Bubble follows the window** — the bubble tracks the session card position across displays and moves with the window
 
 ### Codex CLI Support
-- **Zero-config log monitoring** — automatically detects and reads Codex JSONL logs without needing any hook installation
-- **Session name display** — shows the `/rename`-set session name from Codex
+- **Native hooks** — registered automatically in `~/.codex/hooks.json`: live status, interrupt events, click-to-focus the terminal, and **permission bubbles** (one-off allow / deny)
+- **One-time approval** — Codex only runs hooks you trust: open Codex, run `/hooks` and trust the VigilCLI entries (the tray menu reminds you). Hook definitions are kept stable, so VigilCLI upgrades normally don't need re-approval
+- **Log fallback** — until the hooks are trusted (or on older Codex), VigilCLI polls the JSONL session logs (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`); no permission bubbles in that mode
+- **Session name display** — shows the `/rename`-set session name (read from `~/.codex/session_index.jsonl`)
+- **Limitation** — Codex hooks can't write permission rules yet, so Codex bubbles have no "always allow" suggestions
 
 ### Customization
 | Option | Choices |
@@ -69,9 +72,10 @@ Grab the latest release for your platform from the [Releases](../../releases) pa
 | Platform | File |
 |----------|------|
 | macOS (Apple Silicon) | `VigilCLI-*-arm64.dmg` |
-| macOS (Intel) | `VigilCLI-*-x64.dmg` |
 | Windows | `VigilCLI-Setup-*.exe` |
 | Linux | `VigilCLI-*.AppImage` or `.deb` |
+
+> Only Apple Silicon (arm64) builds are published for macOS. On Intel Macs, run from source (see [Build from source](#build-from-source)).
 
 ### macOS: open without quarantine warning
 
@@ -81,27 +85,26 @@ xattr -cr /Applications/VigilCLI.app
 
 ---
 
-## Hook setup (Claude Code)
+## Hook setup
 
-VigilCLI intercepts Claude Code tool calls via a hooks config. Run the post-install hook once:
+VigilCLI registers its hooks automatically on launch: Claude Code (`~/.claude/settings.json`), Codex (`~/.codex/hooks.json`), plus Gemini CLI, Cursor Agent, CodeBuddy and CodeflickerCLI in their respective config files. Nothing to run by hand.
 
-```bash
-# In your Claude Code project or globally
-# VigilCLI installs hooks automatically on first launch
-```
+Permission approval uses the command hook `permission-hook.js` (shared by Claude Code and Codex). It reads the current port from `~/.vigilcli/runtime.json`, authenticates with `~/.vigilcli/auth-token` (mode 0600), and only honors a decision after verifying an HMAC proof from the server — so config files contain no port or secret, and a process squatting on the port cannot approve anything. When VigilCLI isn't running the script exits silently and Claude Code / Codex show their normal terminal prompt.
 
-Or manually add to your `.claude/settings.json`:
+**Remote sessions** (SSH port forwarding): on the remote host run `node hooks/dist/install.js --remote --token <contents of your local ~/.vigilcli/auth-token>`, or set `VIGILCLI_TOKEN` there.
+
+For reference, a Claude Code entry looks like this (one entry per hooked event):
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": ".*",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "node /path/to/vigilcli/hooks/dist/claude-hook.js"
+            "command": "node /path/to/vigilcli/hooks/dist/vigilcli-hook.js PreToolUse"
           }
         ]
       }
@@ -118,21 +121,27 @@ Or manually add to your `.claude/settings.json`:
 # Install dependencies
 npm install
 
-# Run in dev mode
-npm start
-
-# Build for macOS (produces DMG for arm64 + x64)
-npm run build:mac
-
-# Build for Windows
+# Compile TypeScript + hooks (same as `npm run build:all-ts`)
 npm run build
 
-# Build for Linux
-npm run build:linux
+# Run (loads the compiled src/main.js; set VIGILCLI_DEV_TS=1 to run the .ts sources via tsx)
+npm start
 
-# Build TypeScript + hooks
-npm run build:all-ts
+# Type-check and test
+npm run typecheck
+npm test
+
+# Package for macOS (arm64 DMG only)
+npm run build:mac
+
+# Package for Windows (x64 NSIS installer)
+npm run build:win
+
+# Package for Linux (AppImage + deb)
+npm run build:linux
 ```
+
+Compiled output is committed (the `.js` next to each `.ts` in `src/` / `agents/`, and the esbuild bundles in `hooks/dist/`); CI fails if it is out of sync, so run `npm run build` after editing TypeScript.
 
 Requires **Node.js 18+** and **Electron 41**.
 
@@ -142,10 +151,13 @@ Requires **Node.js 18+** and **Electron 41**.
 
 | Tool | Hook method | Session detect |
 |------|------------|----------------|
-| Claude Code | PreToolUse hook | ✅ |
-| Codex CLI | JSONL log monitor | ✅ |
-| Cursor | (planned) | — |
-| Gemini CLI | hook installer included | ✅ |
+| Claude Code | Hooks (auto-registered, incl. permission bubbles) | ✅ |
+| Codex CLI | Hooks (auto-registered, trust via `/hooks`; permission bubbles), log monitor fallback | ✅ |
+| Gemini CLI | Hooks (auto-registered) | ✅ |
+| Cursor Agent | Hooks (auto-registered) | ✅ |
+| CodeBuddy | Hooks (auto-registered) | ✅ |
+| CodeflickerCLI | Hooks (auto-registered) | ✅ |
+| Copilot CLI | Hook script included (`hooks/dist/copilot-hook.js`), configure manually | ✅ |
 
 ---
 

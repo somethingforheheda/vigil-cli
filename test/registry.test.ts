@@ -3,16 +3,22 @@ import assert from "node:assert";
 import { getAllAgents, getAgent, getAllProcessNames } from "../agents/registry";
 
 describe("Agent Registry", () => {
-  it("should return all six agents", () => {
-    const agents = getAllAgents();
-    assert.strictEqual(agents.length, 6);
-    const ids = agents.map((a) => a.id);
-    assert.ok(ids.includes("claude-code"));
-    assert.ok(ids.includes("codex"));
-    assert.ok(ids.includes("copilot-cli"));
-    assert.ok(ids.includes("gemini-cli"));
-    assert.ok(ids.includes("cursor-agent"));
-    assert.ok(ids.includes("codebuddy"));
+  const EXPECTED_IDS = [
+    "claude-code",
+    "codex",
+    "copilot-cli",
+    "gemini-cli",
+    "cursor-agent",
+    "codebuddy",
+    "codeflicker",
+  ];
+
+  it("should register exactly the expected agents", () => {
+    const ids = getAllAgents().map((a) => a.id);
+    // Compare sorted lists so adding/removing an agent requires updating EXPECTED_IDS
+    // (and a failure message shows exactly which id is missing/extra).
+    assert.deepStrictEqual([...ids].sort(), [...EXPECTED_IDS].sort());
+    assert.strictEqual(new Set(ids).size, ids.length, "agent ids must be unique");
   });
 
   it("should look up agents by ID", () => {
@@ -22,6 +28,7 @@ describe("Agent Registry", () => {
     assert.strictEqual(getAgent("gemini-cli")!.name, "Gemini CLI");
     assert.strictEqual(getAgent("cursor-agent")!.name, "Cursor Agent");
     assert.strictEqual(getAgent("codebuddy")!.name, "CodeBuddy");
+    assert.strictEqual(getAgent("codeflicker")!.name, "CodeflickerCLI");
     assert.strictEqual(getAgent("nonexistent"), undefined);
   });
 
@@ -45,13 +52,10 @@ describe("Agent Registry", () => {
 
   it("should aggregate all process names", () => {
     const all = getAllProcessNames();
-    assert.ok(all.length >= 5);
-    const agentIds = [...new Set(all.map((p) => p.agentId))];
-    assert.ok(agentIds.includes("claude-code"));
-    assert.ok(agentIds.includes("codex"));
-    assert.ok(agentIds.includes("copilot-cli"));
-    assert.ok(agentIds.includes("gemini-cli"));
-    assert.ok(agentIds.includes("cursor-agent"));
+    assert.ok(all.every((p) => typeof p.name === "string" && p.name.length > 0));
+    const agentIds = [...new Set(all.map((p) => p.agentId))].sort();
+    // Every registered agent must contribute at least one process name
+    assert.deepStrictEqual(agentIds, [...EXPECTED_IDS].sort());
   });
 
   it("should have correct capabilities", () => {

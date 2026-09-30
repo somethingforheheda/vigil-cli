@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { resolveNodeBin } from "./server-config";
+import { resolveHookScriptPath, writeJsonAtomic } from "./shared/install-utils";
 
 const MARKER = "gemini-hook.js";
 
@@ -29,20 +30,6 @@ function extractExistingNodeBin(settings: Record<string, unknown>, marker: strin
   return null;
 }
 
-function writeJsonAtomic(filePath: string, data: unknown): void {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmpPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch {}
-    throw err;
-  }
-}
-
 interface RegisterGeminiHooksOptions {
   silent?: boolean;
   settingsPath?: string;
@@ -58,8 +45,7 @@ export function registerGeminiHooks(options: RegisterGeminiHooksOptions = {}): {
   }
 
   // Points to hooks/dist/ bundle output
-  let hookScript = path.resolve(__dirname, "..", "dist", "gemini-hook.js").replace(/\\/g, "/");
-  hookScript = hookScript.replace("app.asar/", "app.asar.unpacked/");
+  const hookScript = resolveHookScriptPath("gemini-hook.js", __dirname);
 
   let settings: Record<string, unknown> = {};
   try {
@@ -82,8 +68,9 @@ export function registerGeminiHooks(options: RegisterGeminiHooksOptions = {}): {
     const arr = hooks[event];
     let found = false, stalePath = false;
     for (const entry of arr) {
-      const cmd = entry.command as string | undefined;
-      if (!cmd?.includes(MARKER)) continue;
+      if (!entry || typeof entry !== "object") continue;
+      const cmd = entry.command;
+      if (typeof cmd !== "string" || !cmd.includes(MARKER)) continue;
       found = true;
       if (cmd !== desiredCommand) { entry.command = desiredCommand; stalePath = true; }
       break;

@@ -18,6 +18,10 @@ export interface PermissionEntry {
   hideTimer: ReturnType<typeof setTimeout> | null;
   toolName: string;
   toolInput: Record<string, unknown>;
+  /** Agent that raised the request ("claude-code", "codex", ...) */
+  agentId?: string | null;
+  /** Claude Code tool_use_id when the PermissionRequest payload carries one */
+  toolUseId?: string | null;
   resolvedSuggestion: ResolvedSuggestion | null;
   createdAt: number;
   isElicitation?: boolean;
@@ -74,6 +78,9 @@ export interface StateContext {
   /** Resolve a permission entry (allow/deny) */
   resolvePermissionEntry(entry: PermissionEntry, behavior: "allow" | "deny", message?: string): void;
 
+  /** Close a permission bubble without deciding (Claude Code asks in the terminal) */
+  dismissPermissionEntry(entry: PermissionEntry, reason: string): void;
+
   /** Rebuild the context menu */
   buildContextMenu(): void;
 
@@ -107,6 +114,9 @@ export interface PermContext {
 
   /** Focus terminal for a session ID */
   focusTerminalForSession(sessionId: string): void;
+
+  /** A permission entry left the pending list ("none" = no decision was sent) */
+  onPermissionResolved(sessionId: string, behavior: "allow" | "deny" | "none"): void;
 }
 
 // ── ServerContext — consumed by src/server.ts ──
@@ -122,6 +132,8 @@ export interface ServerContext {
 
   applySessionEvent(update: SessionEventUpdate): void;
   resolvePermissionEntry(entry: PermissionEntry, behavior: "allow" | "deny", message?: string): void;
+  dismissPermissionEntry(entry: PermissionEntry, reason: string): void;
+  sendNoDecision(res: ServerResponse): void;
   sendPermissionResponse(
     res: ServerResponse,
     decision:
@@ -132,6 +144,8 @@ export interface ServerContext {
   ): void;
   showPermissionBubble(entry: PermissionEntry): void;
   permLog(msg: string): void;
+  /** Called after the startup hook sync finished (menus can show hook status) */
+  onHooksSynced?(): void;
 }
 
 // ── MenuContext — consumed by src/menu.ts ──
@@ -175,6 +189,12 @@ export interface MenuContext {
   buildSessionSubmenu(): MenuItemConstructorOptions[];
   savePrefs(): void;
   getHookServerPort(): number;
+  /** Stop the settings watcher from re-adding hooks the user just removed */
+  suspendHookRestore(): void;
+  /** Re-sync Claude Code hooks with current prefs (e.g. auto-start toggle) */
+  syncVigilCLIHooks(): void;
+  /** Codex hooks state after the last sync (null = Codex not installed / not synced yet) */
+  getCodexHooksStatus(): { registered: boolean; disabledByConfig: boolean; trusted: boolean | null } | null;
   clampToScreen(x: number, y: number, w: number, h: number): { x: number; y: number };
   getNearestWorkArea(cx: number, cy: number): Rectangle;
   reapplyMacVisibility(): void;

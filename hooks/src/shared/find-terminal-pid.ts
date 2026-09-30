@@ -2,8 +2,38 @@
 // Extracted from vigilcli-hook.js getStablePid() — used by all hook scripts.
 // Bundled into each hook's dist/ output by esbuild (zero external deps at runtime).
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import * as pathLib from "path";
+
+interface ProcInfo { ppid: number; comm: string; }
+
+/** Parse `ps -Ao pid=,ppid=,comm=` output (comm may contain spaces on macOS). */
+export function parsePsSnapshot(out: string): Map<number, ProcInfo> {
+  const table = new Map<number, ProcInfo>();
+  for (const raw of out.split("\n")) {
+    const m = raw.match(/^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/);
+    if (!m) continue;
+    table.set(parseInt(m[1], 10), { ppid: parseInt(m[2], 10), comm: m[3] });
+  }
+  return table;
+}
+
+/** One `ps` call for the whole process table (instead of 2 per tree level). */
+function readPsSnapshot(): Map<number, ProcInfo> | null {
+  try {
+    const out = execFileSync("ps", ["-Ao", "pid=,ppid=,comm="], {
+      encoding: "utf8", timeout: 1500, maxBuffer: 16 * 1024 * 1024,
+    });
+    const table = parsePsSnapshot(out);
+    return table.size ? table : null;
+  } catch {
+    return null;
+  }
+}
+
+function readUnixCommandLine(pid: number, timeout: number): string {
+  return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout });
+}
 
 // ── Platform-specific process name sets ──
 
@@ -76,6 +106,8 @@ export function findTerminalPid(): number | null {
   _detectedEditor = null;
   _agentPid = null;
 
+  const psTable = isWin ? null : readPsSnapshot();
+
   for (let i = 0; i < 8; i++) {
     let name: string, parentPid: number;
     try {
@@ -90,16 +122,16 @@ export function findTerminalPid(): number | null {
         name = (parts[1] ?? "").trim().toLowerCase();
         parentPid = parseInt(parts[2] ?? "0", 10);
       } else {
-        const cp = require("child_process") as typeof import("child_process");
-        const ppidOut = cp.execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf8", timeout: 1000 }).trim();
-        const commOut = cp.execSync(`ps -o comm= -p ${pid}`, { encoding: "utf8", timeout: 1000 }).trim();
+        const info = psTable?.get(pid);
+        if (!info) break;
+        const commOut = info.comm;
         name = pathLib.basename(commOut).toLowerCase();
         if (!_detectedEditor) {
           const fullLower = commOut.toLowerCase();
           if (fullLower.includes("visual studio code")) _detectedEditor = "code";
           else if (fullLower.includes("cursor.app")) _detectedEditor = "cursor";
         }
-        parentPid = parseInt(ppidOut, 10);
+        parentPid = info.ppid;
       }
     } catch { break; }
 
@@ -114,7 +146,7 @@ export function findTerminalPid(): number | null {
           const cmdOut = isWin
             ? execSync(`wmic process where "ProcessId=${pid}" get CommandLine /format:csv`,
                 { encoding: "utf8", timeout: 500, windowsHide: true })
-            : execSync(`ps -o command= -p ${pid}`, { encoding: "utf8", timeout: 500 });
+            : readUnixCommandLine(pid, 500);
           if (cmdOut.includes("claude-code") || cmdOut.includes("@anthropic-ai")) _agentPid = pid;
         } catch {}
       }
@@ -135,7 +167,7 @@ export function findTerminalPid(): number | null {
             `wmic process where "ProcessId=${_agentPid}" get CommandLine /format:csv`,
             { encoding: "utf8", timeout: 500, windowsHide: true },
           )
-        : execSync(`ps -o command= -p ${_agentPid}`, { encoding: "utf8", timeout: 500 });
+        : readUnixCommandLine(_agentPid, 500);
       if (/\s(-p|--print)(\s|$)/.test(cmdOut)) _isHeadless = true;
     } catch {}
   }

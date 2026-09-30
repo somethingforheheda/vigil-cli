@@ -54,6 +54,23 @@ let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 let autoReturnTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingState: AgentState | null = null;
 
+// ── Ended-session tombstones ──
+// Late events (another hook process, aborted /permission) arriving right after
+// SessionEnd must not resurrect a ghost card.
+const TOMBSTONE_MS = 30_000;
+const endedSessions = new Map<string, number>();
+const RESURRECT_EVENTS = new Set(["SessionStart", "UserPromptSubmit"]);
+
+function isTombstoned(sessionId: string, event: string | null | undefined): boolean {
+  const endedAt = endedSessions.get(sessionId);
+  if (endedAt === undefined) return false;
+  if (Date.now() - endedAt > TOMBSTONE_MS || (event && RESURRECT_EVENTS.has(event))) {
+    endedSessions.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
 // ── Stale cleanup ──
 let staleCleanupTimer: ReturnType<typeof setInterval> | null = null;
 let isScanInFlight = false;
@@ -111,7 +128,12 @@ function setState(newState: AgentState): void {
     pendingState = null;
   }
 
-  if (newState === currentState) return;
+  if (newState === currentState) {
+    // A cleared pending transition may have cancelled the auto-return timer
+    // (it is dropped when queueing) — re-arm it so oneshot states never stick.
+    if (!autoReturnTimer) armAutoReturn(currentState);
+    return;
+  }
 
   const minTime = MIN_DISPLAY_MS[currentState] || 0;
   const elapsed = Date.now() - stateChangedAt;
@@ -145,32 +167,23 @@ function commitState(state: AgentState): void {
 
   ctx.sendToRenderer("state-change", state);
 
+  armAutoReturn(state);
+}
+
+function armAutoReturn(state: AgentState): void {
   if (autoReturnTimer) clearTimeout(autoReturnTimer);
+  autoReturnTimer = null;
   const returnMs = AUTO_RETURN_MS[state];
-  if (returnMs !== undefined) {
-    autoReturnTimer = setTimeout(() => {
-      autoReturnTimer = null;
-      // When thinking times out, also reset stuck thinking sessions in the map
-      // so pickDisplayState() can actually return idle instead of thinking.
-      if (state === "thinking") {
-        const now = Date.now();
-        let changed = false;
-        for (const [, s] of store.entries()) {
-          if (s.state === "thinking") {
-            s.state = "idle"; s.displaySvg = null; s.updatedAt = now; changed = true;
-          }
-        }
-        if (changed) sendSessionsUpdate();
-      }
-      const next = pickDisplayState();
-      // If we're still in the same ONESHOT state (e.g., permission still pending),
-      // silently stay without re-triggering sound or cascading loops.
-      if (next === state && ONESHOT_STATES.has(state)) return;
-      commitState(next);
-    }, returnMs);
-  } else {
+  if (returnMs === undefined) return;
+  autoReturnTimer = setTimeout(() => {
     autoReturnTimer = null;
-  }
+    const next = pickDisplayState();
+    // Still the same state (e.g. permission pending, long thinking): stay
+    // silently — no sound replay, no cascading loops. Stuck sessions are
+    // downgraded by the stale cleanup, not by rewriting them here.
+    if (next === state) return;
+    commitState(next);
+  }, returnMs);
 }
 
 function pickDisplaySvg(
@@ -218,11 +231,24 @@ function applySessionEvent(update: SessionEventUpdate): void {
     if (startupRecoveryTimer) { clearTimeout(startupRecoveryTimer); startupRecoveryTimer = null; }
   }
 
+  if (isTombstoned(sessionId, event)) return;
+
   if (event === "PermissionRequest") {
     const existing = store.get(sessionId);
     if (existing) {
       existing.state = "notification";
       existing.updatedAt = Date.now();
+      // The command permission hook reports the terminal PID; fill gaps so
+      // clicking the card / bubble can focus the right terminal.
+      if (sourcePid && !existing.sourcePid) existing.sourcePid = sourcePid;
+      if (agentPid && !existing.agentPid) existing.agentPid = agentPid;
+      if (pidChain && pidChain.length && !existing.pidChain) existing.pidChain = pidChain;
+      if (editor && !existing.editor) existing.editor = editor;
+      if (cwd && !existing.cwd) existing.cwd = cwd;
+      if (agentId && !existing.agentId) existing.agentId = agentId;
+      if (!existing.pidReachable && (agentPid || sourcePid)) {
+        existing.pidReachable = isProcessAlive((agentPid || sourcePid)!);
+      }
     } else {
       // Session record is gone (PID died, stale-cleaned, etc.) but Claude Code is
       // still running. Create a minimal record so the card appears and the idle
@@ -240,7 +266,7 @@ function applySessionEvent(update: SessionEventUpdate): void {
         host: host || null,
         headless: headless || false,
         title: title || null,
-        pidReachable: sourcePid ? isProcessAlive(sourcePid) : false,
+        pidReachable: (agentPid || sourcePid) ? isProcessAlive((agentPid || sourcePid)!) : false,
         subagents: new Set<string>(),
         currentTool: null,
         currentToolInput: null,
@@ -264,7 +290,9 @@ function applySessionEvent(update: SessionEventUpdate): void {
   const srcHeadless = headless || (existing && existing.headless) || false;
   const srcTitle = title || (existing && existing.title) || null;
 
-  const pidReachable = existing
+  // Recompute when the record was created without a usable PID (e.g. from
+  // /permission, which carries none) and a later event finally brings one.
+  const pidReachable = existing && (existing.pidReachable || (!agentPid && !sourcePid))
     ? existing.pidReachable
     : (srcAgentPid ? isProcessAlive(srcAgentPid) : (srcPid ? isProcessAlive(srcPid) : false));
 
@@ -290,6 +318,11 @@ function applySessionEvent(update: SessionEventUpdate): void {
   if (event === "SessionEnd") {
     const endingSession = store.get(sessionId);
     store.delete(sessionId);
+    endedSessions.set(sessionId, Date.now());
+    if (endedSessions.size > 200) {
+      const now = Date.now();
+      for (const [id, t] of endedSessions) if (now - t > TOMBSTONE_MS) endedSessions.delete(id);
+    }
     cleanStaleSessions();
     if (!endingSession || !endingSession.headless) {
       let hasLiveInteractive = false;
@@ -339,13 +372,18 @@ function applySessionEvent(update: SessionEventUpdate): void {
   }
 
   // Track active subagents per session
-  if (subagentId) {
+  {
     const entry = store.get(sessionId);
     if (entry) {
-      if (event === "SubagentStart") {
+      if (subagentId && event === "SubagentStart") {
         entry.subagents.add(subagentId);
-      } else if (event === "SubagentStop" || event === "subagentStop") {
+      } else if (subagentId && (event === "SubagentStop" || event === "subagentStop")) {
         entry.subagents.delete(subagentId);
+        // Other subagents still running → keep juggling
+        if (entry.subagents.size > 0 && entry.state === "working") entry.state = "juggling";
+      } else if (event === "Stop" || event === "SessionStart" || event === "UserPromptSubmit") {
+        // Turn boundaries: a lost SubagentStop (e.g. interrupt) must not inflate the count forever
+        entry.subagents.clear();
       }
     }
   }
@@ -382,6 +420,33 @@ function applySessionEvent(update: SessionEventUpdate): void {
   sendSessionsUpdate();
 }
 
+function hasPendingPermission(sessionId: string): boolean {
+  return ctx.pendingPermissions.some((p) => p.sessionId === sessionId && !p.isCodexNotify);
+}
+
+/**
+ * Called after a permission request leaves the pending list. Without this the
+ * session stays in "notification" forever when the user answers in the bubble
+ * or the request is aborted (Esc in terminal).
+ */
+function onPermissionResolved(sessionId: string, behavior: "allow" | "deny" | "none"): void {
+  const entry = store.get(sessionId);
+  if (!entry || entry.state !== "notification" || hasPendingPermission(sessionId)) return;
+  entry.state = behavior === "allow" ? "working" : "idle";
+  entry.displaySvg = null;
+  entry.updatedAt = Date.now();
+  setState(pickDisplayState());
+  sendSessionsUpdate();
+}
+
+/** Title-only update (e.g. Codex /rename): never touches state, sounds or bubbles. */
+function updateSessionTitle(sessionId: string, title: string): void {
+  const entry = store.get(sessionId);
+  if (!entry || !title || entry.title === title) return;
+  entry.title = title.slice(0, 200);
+  sendSessionsUpdate();
+}
+
 function isProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e: unknown) {
     return (e as NodeJS.ErrnoException).code === "EPERM";
@@ -389,7 +454,7 @@ function isProcessAlive(pid: number): boolean {
 }
 
 function cleanStaleSessions(): void {
-  const { changed, removedNonHeadless } = store.cleanStaleSessions();
+  const { changed, removedNonHeadless } = store.cleanStaleSessions(hasPendingPermission);
   if (changed) {
     if (store.size === 0) {
       if (removedNonHeadless) setState("sleeping");
@@ -451,6 +516,7 @@ function pickDisplayState(): AgentState {
 // ── Sessions IPC update ──
 
 function sendSessionsUpdate(): void {
+  checkIdleCollapse();
   if (ctx.sendSessionsUpdate) {
     ctx.sendSessionsUpdate();
     return;
@@ -474,7 +540,6 @@ function sendSessionsUpdate(): void {
     });
   }
   ctx.sendToRenderer(IpcChannels.SESSIONS_UPDATE, snapshots);
-  checkIdleCollapse();
 }
 
 // ── Session Dashboard ──
@@ -573,7 +638,8 @@ function enableDoNotDisturb(): void {
   if (ctx.dndEnabled) return;
   ctx.dndEnabled = true;
   ctx.sendToRenderer(IpcChannels.DND_CHANGE, true);
-  for (const perm of [...ctx.pendingPermissions]) ctx.resolvePermissionEntry(perm, "deny", "DND enabled");
+  // Hand pending requests back to the terminal rather than rejecting them
+  for (const perm of [...ctx.pendingPermissions]) ctx.dismissPermissionEntry(perm, "DND enabled");
   if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; pendingState = null; }
   if (autoReturnTimer) { clearTimeout(autoReturnTimer); autoReturnTimer = null; }
   commitState("sleeping");
@@ -626,6 +692,8 @@ return {
   getCurrentState,
   getIsRecoveringSession,
   sendSessionsUpdate,
+  onPermissionResolved,
+  updateSessionTitle,
   sessions,
   VALID_STATES,
   STATE_PRIORITY,

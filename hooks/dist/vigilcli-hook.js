@@ -37,6 +37,26 @@ var SERVER_PORTS = Array.from(
 );
 var STATE_PATH = "/state";
 var RUNTIME_CONFIG_PATH = path.join(os.homedir(), ".vigilcli", "runtime.json");
+var AUTH_HEADER = "x-vigilcli-token";
+var AUTH_TOKEN_PATH = path.join(os.homedir(), ".vigilcli", "auth-token");
+var AUTH_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+function normalizeAuthToken(value) {
+  if (typeof value !== "string") return null;
+  const token = value.trim();
+  return AUTH_TOKEN_PATTERN.test(token) ? token : null;
+}
+var AUTH_TOKEN_ENV = "VIGILCLI_TOKEN";
+function readAuthToken(filePath) {
+  if (filePath === void 0) {
+    const fromEnv = (process.env[AUTH_TOKEN_ENV] ?? "").trim();
+    if (fromEnv) return fromEnv;
+  }
+  try {
+    return normalizeAuthToken(fs.readFileSync(filePath ?? AUTH_TOKEN_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
 function normalizePort(value) {
   const port = Number(value);
   return Number.isInteger(port) && SERVER_PORTS.includes(port) ? port : null;
@@ -105,57 +125,91 @@ function splitPortCandidates(preferredPort, options = {}) {
   }
   return { direct, fallback, all };
 }
+function isSuccessStatus(res) {
+  const code = res.statusCode;
+  if (code === void 0) return true;
+  return code >= 200 && code < 300;
+}
 function probePort(port, timeoutMs, callback, options = {}) {
   const httpGet = options.httpGet ?? http.get;
-  const req = httpGet(
-    { hostname: "127.0.0.1", port, path: STATE_PATH, timeout: timeoutMs },
-    (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        if (body.length < 256) body += chunk;
-      });
-      res.on("end", () => callback(isVigilCLIResponse(res, body)));
-    }
-  );
-  req.on("error", () => callback(false));
+  let done = false;
+  const finish = (ok) => {
+    if (done) return;
+    done = true;
+    callback(ok);
+  };
+  let req;
+  try {
+    req = httpGet(
+      { hostname: "127.0.0.1", port, path: STATE_PATH, timeout: timeoutMs },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          if (body.length < 256) body += chunk;
+        });
+        res.on("end", () => finish(isSuccessStatus(res) && isVigilCLIResponse(res, body)));
+        res.on("error", () => finish(false));
+      }
+    );
+  } catch {
+    finish(false);
+    return;
+  }
+  req.on("error", () => finish(false));
   req.on("timeout", () => {
+    finish(false);
     req.destroy();
-    callback(false);
   });
 }
 function postStateToPort(port, payload, timeoutMs, callback, options = {}) {
   const httpRequest = options.httpRequest ?? http.request;
-  const req = httpRequest(
-    {
-      hostname: "127.0.0.1",
-      port,
-      path: STATE_PATH,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(payload)
+  const authToken = options.authToken !== void 0 ? options.authToken : readAuthToken();
+  let done = false;
+  const finish = (posted) => {
+    if (done) return;
+    done = true;
+    callback(posted, port);
+  };
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(payload)
+  };
+  if (authToken) headers[AUTH_HEADER] = authToken;
+  let req;
+  try {
+    req = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: STATE_PATH,
+        method: "POST",
+        headers,
+        timeout: timeoutMs
       },
-      timeout: timeoutMs
-    },
-    (res) => {
-      if (readHeader(res, VIGILCLI_SERVER_HEADER) === VIGILCLI_SERVER_ID) {
-        res.resume();
-        callback(true, port);
-        return;
+      (res) => {
+        if (readHeader(res, VIGILCLI_SERVER_HEADER) === VIGILCLI_SERVER_ID) {
+          res.resume();
+          finish(isSuccessStatus(res));
+          return;
+        }
+        let responseBody = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          if (responseBody.length < 256) responseBody += chunk;
+        });
+        res.on("end", () => finish(isSuccessStatus(res) && isVigilCLIResponse(res, responseBody)));
+        res.on("error", () => finish(false));
       }
-      let responseBody = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        if (responseBody.length < 256) responseBody += chunk;
-      });
-      res.on("end", () => callback(isVigilCLIResponse(res, responseBody), port));
-    }
-  );
-  req.on("error", () => callback(false, port));
+    );
+  } catch {
+    finish(false);
+    return;
+  }
+  req.on("error", () => finish(false));
   req.on("timeout", () => {
+    finish(false);
     req.destroy();
-    callback(false, port);
   });
   req.end(payload);
 }
@@ -165,6 +219,8 @@ function postStateToRunningServer(body, options, callback) {
   const { direct, fallback } = splitPortCandidates(options.preferredPort ?? null, options);
   const probe = options.probePort ?? probePort;
   const post = options.postStateToPort ?? postStateToPort;
+  const authToken = options.authToken !== void 0 ? options.authToken : readAuthToken();
+  const postOptions = { httpRequest: options.httpRequest, authToken };
   let directIndex = 0;
   let fallbackIndex = 0;
   const tryFallback = () => {
@@ -184,7 +240,7 @@ function postStateToRunningServer(body, options, callback) {
           return;
         }
         tryFallback();
-      }, { httpRequest: options.httpRequest });
+      }, postOptions);
     }, { httpGet: options.httpGet });
   };
   const tryDirect = () => {
@@ -199,7 +255,7 @@ function postStateToRunningServer(body, options, callback) {
         return;
       }
       tryDirect();
-    }, { httpRequest: options.httpRequest });
+    }, postOptions);
   };
   tryDirect();
 }
@@ -221,6 +277,31 @@ function isVigilCLIResponse(res, body) {
 // hooks/src/shared/find-terminal-pid.ts
 var import_child_process = require("child_process");
 var pathLib = __toESM(require("path"));
+function parsePsSnapshot(out) {
+  const table = /* @__PURE__ */ new Map();
+  for (const raw of out.split("\n")) {
+    const m = raw.match(/^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/);
+    if (!m) continue;
+    table.set(parseInt(m[1], 10), { ppid: parseInt(m[2], 10), comm: m[3] });
+  }
+  return table;
+}
+function readPsSnapshot() {
+  try {
+    const out = (0, import_child_process.execFileSync)("ps", ["-Ao", "pid=,ppid=,comm="], {
+      encoding: "utf8",
+      timeout: 1500,
+      maxBuffer: 16 * 1024 * 1024
+    });
+    const table = parsePsSnapshot(out);
+    return table.size ? table : null;
+  } catch {
+    return null;
+  }
+}
+function readUnixCommandLine(pid, timeout) {
+  return (0, import_child_process.execFileSync)("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout });
+}
 var TERMINAL_NAMES_WIN = /* @__PURE__ */ new Set([
   "windowsterminal.exe",
   "cmd.exe",
@@ -307,6 +388,7 @@ function findTerminalPid() {
   _pidChain = [];
   _detectedEditor = null;
   _agentPid = null;
+  const psTable = isWin ? null : readPsSnapshot();
   for (let i = 0; i < 8; i++) {
     let name, parentPid;
     try {
@@ -321,16 +403,16 @@ function findTerminalPid() {
         name = (parts[1] ?? "").trim().toLowerCase();
         parentPid = parseInt(parts[2] ?? "0", 10);
       } else {
-        const cp = require("child_process");
-        const ppidOut = cp.execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf8", timeout: 1e3 }).trim();
-        const commOut = cp.execSync(`ps -o comm= -p ${pid}`, { encoding: "utf8", timeout: 1e3 }).trim();
+        const info = psTable?.get(pid);
+        if (!info) break;
+        const commOut = info.comm;
         name = pathLib.basename(commOut).toLowerCase();
         if (!_detectedEditor) {
           const fullLower = commOut.toLowerCase();
           if (fullLower.includes("visual studio code")) _detectedEditor = "code";
           else if (fullLower.includes("cursor.app")) _detectedEditor = "cursor";
         }
-        parentPid = parseInt(ppidOut, 10);
+        parentPid = info.ppid;
       }
     } catch {
       break;
@@ -345,7 +427,7 @@ function findTerminalPid() {
           const cmdOut = isWin ? (0, import_child_process.execSync)(
             `wmic process where "ProcessId=${pid}" get CommandLine /format:csv`,
             { encoding: "utf8", timeout: 500, windowsHide: true }
-          ) : (0, import_child_process.execSync)(`ps -o command= -p ${pid}`, { encoding: "utf8", timeout: 500 });
+          ) : readUnixCommandLine(pid, 500);
           if (cmdOut.includes("claude-code") || cmdOut.includes("@anthropic-ai")) _agentPid = pid;
         } catch {
         }
@@ -362,13 +444,91 @@ function findTerminalPid() {
       const cmdOut = isWin ? (0, import_child_process.execSync)(
         `wmic process where "ProcessId=${_agentPid}" get CommandLine /format:csv`,
         { encoding: "utf8", timeout: 500, windowsHide: true }
-      ) : (0, import_child_process.execSync)(`ps -o command= -p ${_agentPid}`, { encoding: "utf8", timeout: 500 });
+      ) : readUnixCommandLine(_agentPid, 500);
       if (/\s(-p|--print)(\s|$)/.test(cmdOut)) _isHeadless = true;
     } catch {
     }
   }
   _stablePid = terminalPid ?? lastGoodPid;
   return _stablePid;
+}
+
+// hooks/src/shared/hook-payload.ts
+var fs2 = __toESM(require("fs"));
+var TOOL_INPUT_KEYS = [
+  "command",
+  "description",
+  "file_path",
+  "path",
+  "pattern",
+  "query",
+  "url",
+  "prompt",
+  "subagent_type"
+];
+var TOOL_INPUT_MAX_STRING = 2e3;
+var TITLE_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "UserPromptSubmit", "Stop"]);
+var TRANSCRIPT_TAIL_BYTES = 256 * 1024;
+function truncate(value, max) {
+  return value.length > max ? value.slice(0, max) : value;
+}
+function trimToolInput(input, maxString = TOOL_INPUT_MAX_STRING) {
+  if (input === void 0 || input === null) return void 0;
+  if (typeof input !== "object" || Array.isArray(input)) return {};
+  const src = input;
+  const out = {};
+  for (const key of TOOL_INPUT_KEYS) {
+    const value = src[key];
+    if (typeof value === "string") out[key] = truncate(value, maxString);
+    else if (typeof value === "number" || typeof value === "boolean") out[key] = value;
+  }
+  return out;
+}
+function readTranscriptTitle(filePath, tailBytes = TRANSCRIPT_TAIL_BYTES) {
+  let fd = null;
+  try {
+    fd = fs2.openSync(filePath, "r");
+    const size = fs2.fstatSync(fd).size;
+    if (!size) return "";
+    const length = Math.min(size, tailBytes);
+    const start = size - length;
+    const buf = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const n = fs2.readSync(fd, buf, offset, length - offset, start + offset);
+      if (n <= 0) break;
+      offset += n;
+    }
+    let content = buf.subarray(0, offset).toString("utf8");
+    if (start > 0) {
+      const nl = content.indexOf("\n");
+      content = nl === -1 ? "" : content.slice(nl + 1);
+    }
+    let lastCustom = "", lastAi = "";
+    for (const line of content.split("\n")) {
+      if (line.includes('"type":"custom-title"')) {
+        try {
+          lastCustom = String(JSON.parse(line).customTitle ?? "");
+        } catch {
+        }
+      } else if (line.includes('"type":"ai-title"')) {
+        try {
+          lastAi = String(JSON.parse(line).aiTitle ?? "");
+        } catch {
+        }
+      }
+    }
+    return lastCustom || lastAi;
+  } catch {
+    return "";
+  } finally {
+    if (fd !== null) {
+      try {
+        fs2.closeSync(fd);
+      } catch {
+      }
+    }
+  }
 }
 
 // hooks/src/vigilcli-hook.ts
@@ -418,33 +578,9 @@ process.stdin.on("end", () => {
     subagentId = String(payload.agent_id ?? "");
     const source = String(payload.source ?? payload.reason ?? "");
     const transcriptPath = String(payload.transcript_path ?? "");
-    if (transcriptPath) {
-      try {
-        const fs2 = require("fs");
-        const stat = fs2.statSync(transcriptPath);
-        if (stat.size < 5 * 1024 * 1024) {
-          const content = fs2.readFileSync(transcriptPath, "utf8");
-          let lastCustom = "", lastAi = "";
-          for (const line of content.split("\n")) {
-            if (line.includes('"type":"custom-title"')) {
-              try {
-                lastCustom = JSON.parse(line).customTitle ?? "";
-              } catch {
-              }
-            } else if (line.includes('"type":"ai-title"')) {
-              try {
-                lastAi = JSON.parse(line).aiTitle ?? "";
-              } catch {
-              }
-            }
-          }
-          sessionTitle = lastCustom || lastAi;
-        }
-      } catch {
-      }
-    }
+    if (transcriptPath && TITLE_EVENTS.has(event)) sessionTitle = readTranscriptTitle(transcriptPath);
     const toolName = payload.tool_name != null ? String(payload.tool_name) : void 0;
-    const toolInput = payload.tool_input !== void 0 ? payload.tool_input : void 0;
+    const toolInput = trimToolInput(payload.tool_input);
     const toolUseId = payload.tool_use_id != null ? String(payload.tool_use_id) : void 0;
     const error = payload.error != null ? String(payload.error) : void 0;
     const agentType = payload.agent_type != null ? String(payload.agent_type) : void 0;

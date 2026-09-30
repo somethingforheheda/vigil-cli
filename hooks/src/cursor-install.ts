@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { resolveNodeBin } from "./server-config";
+import { resolveHookScriptPath, writeJsonAtomic } from "./shared/install-utils";
 
 const MARKER = "cursor-hook.js";
 
@@ -34,20 +35,6 @@ function extractExistingNodeBin(settings: Record<string, unknown>, marker: strin
   return null;
 }
 
-function writeJsonAtomic(filePath: string, data: unknown): void {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmpPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch {}
-    throw err;
-  }
-}
-
 interface RegisterCursorHooksOptions {
   silent?: boolean;
   hooksPath?: string;
@@ -68,8 +55,7 @@ export function registerCursorHooks(options: RegisterCursorHooksOptions = {}): {
   }
 
   // Hook script lives in hooks/dist/ after build
-  let hookScript = path.resolve(__dirname, "..", "dist", "cursor-hook.js").replace(/\\/g, "/");
-  hookScript = hookScript.replace("app.asar/", "app.asar.unpacked/");
+  const hookScript = resolveHookScriptPath("cursor-hook.js", __dirname);
 
   let settings: Record<string, unknown> = {};
   try {

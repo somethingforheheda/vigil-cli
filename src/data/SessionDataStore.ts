@@ -13,6 +13,12 @@ function isProcessAlive(pid: number): boolean {
 
 // ── Stale thresholds ──
 export const SESSION_STALE_MS  = 600_000;     // 10 min — delete if source PID died
+export const NO_PID_STALE_MS   = 1_800_000;   // 30 min — delete sessions we can't liveness-check (remote / Codex)
+// Hook-driven active states can get stuck when the terminal never sends a
+// closing event (Claude Code does not fire Stop on user interrupt / Esc).
+export const ACTIVE_STALE_MS   = 600_000;     // 10 min without events → downgrade to idle
+export const ACTIVE_TOOL_STALE_MS = 1_800_000; // 30 min when a tool call is in flight (long builds/tests)
+export const NOTIFICATION_STALE_MS = 60_000;  // notification with no pending permission → idle
 // Note: idle sessions are NOT auto-deleted by timeout.
 // They are removed only when a SessionEnd hook is received (like claude-island).
 // This prevents the bug where a session is cleaned up mid-conversation and a
@@ -69,7 +75,7 @@ export class SessionDataStore {
    * Remove or reset stale sessions.
    * Returns what changed so state.ts can call setState / sendSessionsUpdate.
    */
-  cleanStaleSessions(): CleanResult {
+  cleanStaleSessions(hasPendingPermission: (sessionId: string) => boolean = () => false): CleanResult {
     const now = Date.now();
     let changed = false;
     let removedNonHeadless = false;
@@ -95,25 +101,44 @@ export class SessionDataStore {
       }
 
       // SESSION_STALE_MS (10 min): delete only if source PID confirmed dead.
-      // If the process is still alive, preserve state — state changes are hook-driven only.
       if (age > SESSION_STALE_MS) {
         if (s.pidReachable && s.sourcePid) {
           if (!isProcessAlive(s.sourcePid)) {
             if (!s.headless) removedNonHeadless = true;
             this._sessions.delete(id); changed = true;
+            continue;
           }
-          // else: PID alive → keep session as-is, state driven by hooks
-        } else if (!s.pidReachable) {
+          // else: PID alive → keep session, fall through to active-state downgrade
+        } else if (s.pidReachable || age > NO_PID_STALE_MS) {
           if (!s.headless) removedNonHeadless = true;
           this._sessions.delete(id); changed = true;
-        } else {
-          if (!s.headless) removedNonHeadless = true;
-          this._sessions.delete(id); changed = true;
+          continue;
         }
-        continue;
+      }
+
+      // Downgrade active states that stopped receiving events (never delete —
+      // the process may still be alive; the next hook event restores the state).
+      if (s.state === "notification") {
+        if (age > NOTIFICATION_STALE_MS && !hasPendingPermission(id)) {
+          this.downgradeToIdle(s, now); changed = true;
+        }
+      } else if (s.state === "thinking" || s.state === "working" || s.state === "juggling") {
+        const limit = s.currentTool ? ACTIVE_TOOL_STALE_MS : ACTIVE_STALE_MS;
+        if (age > limit) {
+          this.downgradeToIdle(s, now); changed = true;
+        }
       }
     }
 
     return { changed, removedNonHeadless };
+  }
+
+  private downgradeToIdle(s: SessionRecord, now: number): void {
+    s.state = "idle";
+    s.displaySvg = null;
+    s.currentTool = null;
+    s.currentToolInput = null;
+    s.subagents.clear();
+    s.updatedAt = now;
   }
 }

@@ -1,5 +1,4 @@
 // src/main.ts — Electron main process for vigilCli
-// test comment
 
 // MUST be set before any BrowserWindow is created
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -107,7 +106,14 @@ function savePrefs(): void {
     bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize, orbSize,
     windowOpacity, listCollapsed, sessionCap,
   };
-  try { fs.writeFileSync(PREFS_PATH, JSON.stringify(data)); } catch { /* ignore */ }
+  // Atomic write: a crash mid-write must not wipe every preference
+  const tmp = `${PREFS_PATH}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, PREFS_PATH);
+  } catch {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  }
 }
 
 // ── alwaysOnTop / watchdog ──
@@ -218,10 +224,12 @@ const permCtx: PermContext = {
     const s = sessions.get(sessionId);
     if (s && s.sourcePid) focusTerminalWindow(s.sourcePid, s.cwd, s.editor, s.pidChain);
   },
+  onPermissionResolved: (sessionId, behavior) => _state.onPermissionResolved(sessionId, behavior),
 };
 const _perm = initPermission(permCtx);
 const {
-  showPermissionBubble, resolvePermissionEntry, sendPermissionResponse, stackBubbles,
+  showPermissionBubble, resolvePermissionEntry, dismissPermissionEntry, sendNoDecision,
+  sendPermissionResponse, stackBubbles,
   permLog, PASSTHROUGH_TOOLS, showCodexNotifyBubble, clearCodexNotifyBubbles,
   syncPermissionShortcuts,
 } = _perm;
@@ -234,14 +242,16 @@ const stateCtx: StateContext = {
   get pendingPermissions() { return pendingPermissions; },
   get showSessionId()   { return showSessionId; },
   sendToRenderer: (channel: string, ...args: unknown[]) => {
-    // Pass through dnd-change so the list window DND bar updates
-    if (channel === IpcChannels.DND_CHANGE && listWin && !listWin.isDestroyed())
-      listWin.webContents.send(IpcChannels.DND_CHANGE, ...args);
+    // Pass through channels the list renderer listens to (DND bar, idle collapse)
+    if ((channel === IpcChannels.DND_CHANGE || channel === IpcChannels.COLLAPSE_TO_ORB)
+      && listWin && !listWin.isDestroyed())
+      listWin.webContents.send(channel, ...args);
   },
   playSound: (name: string) => playSound(name),
   t: (key: string) => t(key),
   focusTerminalWindow: (...args) => focusTerminalWindow(...args),
   resolvePermissionEntry: (...args) => resolvePermissionEntry(...args),
+  dismissPermissionEntry: (...args) => dismissPermissionEntry(...args),
   buildContextMenu: () => buildContextMenu(),
   buildTrayMenu:    () => buildTrayMenu(),
   sendSessionsUpdate: () => sendSessionsUpdate(),
@@ -259,6 +269,10 @@ const _focus = initFocus({ _allowSetForeground });
 const { initFocusHelper, focusTerminalWindow } = _focus;
 
 // ── HTTP server — delegated to src/server.ts ──
+// Codex sessions reported by native hooks (~/.codex/hooks.json). For those the
+// JSONL log monitor is redundant (and less accurate), so its events are dropped.
+const codexHookSessions = new Set<string>();
+
 const serverCtx: ServerContext = {
   get autoStartWithClaude() { return autoStartWithClaude; },
   get dndEnabled()          { return dndEnabled; },
@@ -267,11 +281,19 @@ const serverCtx: ServerContext = {
   get passthroughTools()    { return PASSTHROUGH_TOOLS; },
   get validStates()         { return VALID_STATES; },
   get sessions()            { return sessions; },
-  applySessionEvent: (...args) => applySessionEvent(...args),
-  resolvePermissionEntry, sendPermissionResponse, showPermissionBubble, permLog,
+  applySessionEvent: (update) => {
+    if (update.agentId === "codex") {
+      codexHookSessions.add(update.sessionId);
+      if (codexHookSessions.size > 500) codexHookSessions.delete(codexHookSessions.values().next().value!);
+    }
+    applySessionEvent(update);
+  },
+  onHooksSynced: () => rebuildAllMenus(),
+  resolvePermissionEntry, dismissPermissionEntry, sendNoDecision,
+  sendPermissionResponse, showPermissionBubble, permLog,
 };
 const _server = initServer(serverCtx);
-const { startHttpServer, getHookServerPort } = _server;
+const { startHttpServer, getHookServerPort, suspendHookRestore, syncVigilCLIHooks, getCodexHooksStatus } = _server;
 
 // ── Menu — delegated to src/menu.ts ──
 const menuCtx: MenuContext = {
@@ -325,6 +347,9 @@ const menuCtx: MenuContext = {
   buildSessionSubmenu:() => buildSessionSubmenu(),
   savePrefs,
   getHookServerPort:  () => getHookServerPort(),
+  suspendHookRestore: () => suspendHookRestore(),
+  syncVigilCLIHooks:  () => syncVigilCLIHooks(),
+  getCodexHooksStatus: () => getCodexHooksStatus(),
   clampToScreen, getNearestWorkArea, reapplyMacVisibility,
 };
 const _menu = initMenu(menuCtx);
@@ -362,7 +387,32 @@ function getUpdateMenuItem(): Electron.MenuItemConstructorOptions {
 }
 
 // ── Send sessions snapshot to list window ──
+// Coalesced: bursts of hook events (or a Codex log catch-up) produce one IPC
+// message per frame instead of one per event, and unchanged snapshots are skipped.
+const SESSIONS_UPDATE_THROTTLE_MS = 50;
+const TOOL_INPUT_PREVIEW_MAX = 2000;
+let sessionsUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSessionsPayload = "";
+
 function sendSessionsUpdate(): void {
+  if (sessionsUpdateTimer) return;
+  sessionsUpdateTimer = setTimeout(() => {
+    sessionsUpdateTimer = null;
+    flushSessionsUpdate();
+  }, SESSIONS_UPDATE_THROTTLE_MS);
+}
+
+function previewToolInput(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input ?? null;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof v === "string") out[k] = v.length > TOOL_INPUT_PREVIEW_MAX ? v.slice(0, TOOL_INPUT_PREVIEW_MAX) + "\u2026" : v;
+    else if (v === null || typeof v !== "object") out[k] = v;
+  }
+  return out;
+}
+
+function flushSessionsUpdate(force = false): void {
   if (!listWin || listWin.isDestroyed()) return;
   const arr: SessionSnapshot[] = [];
   for (const [sessionId, s] of sessions) {
@@ -377,7 +427,7 @@ function sendSessionsUpdate(): void {
       headless: s.headless ?? false,
       subagentCount: s.subagents ? s.subagents.size : 0,
       currentTool: s.currentTool ?? null,
-      currentToolInput: s.currentToolInput ?? null,
+      currentToolInput: previewToolInput(s.currentToolInput),
       lastError: s.lastError ?? null,
     });
   }
@@ -391,13 +441,14 @@ function sendSessionsUpdate(): void {
     });
     arr.splice(sessionCap);
   }
+  const payload = JSON.stringify(arr);
+  if (!force && payload === lastSessionsPayload) return;
+  lastSessionsPayload = payload;
   listWin.webContents.send(IpcChannels.SESSIONS_UPDATE, arr);
 }
 
 // ── VS Code / Cursor terminal-focus extension ──
 const EXT_ID       = "vigilcli.vigilcli-terminal-focus";
-const EXT_VERSION  = "0.1.0";
-const EXT_DIR_NAME = `${EXT_ID}-${EXT_VERSION}`;
 
 function installTerminalFocusExtension(): void {
   const os = require("os") as typeof import("os");
@@ -405,6 +456,14 @@ function installTerminalFocusExtension(): void {
   let extSrc = path.join(__dirname, "..", "extensions", "vscode");
   extSrc = extSrc.replace("app.asar" + path.sep, "app.asar.unpacked" + path.sep);
   if (!fs.existsSync(extSrc)) return;
+  // Versioned dir name: bumping the bundled extension's version installs the
+  // fixed copy for existing users instead of being skipped as "already there".
+  let extVersion = "0.0.0";
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(extSrc, "package.json"), "utf8")) as { version?: string };
+    if (typeof pkg.version === "string") extVersion = pkg.version;
+  } catch { return; }
+  const EXT_DIR_NAME = `${EXT_ID}-${extVersion}`;
   const targets = [
     path.join(home, ".vscode", "extensions"),
     path.join(home, ".cursor", "extensions"),
@@ -418,6 +477,12 @@ function installTerminalFocusExtension(): void {
       fs.mkdirSync(dest, { recursive: true });
       for (const file of filesToCopy) fs.copyFileSync(path.join(extSrc, file), path.join(dest, file));
       console.log(`VigilCLI: installed terminal-focus extension to ${dest}`);
+      // Remove our older versions so VS Code doesn't load two copies
+      for (const name of fs.readdirSync(extRoot)) {
+        if (name.startsWith(`${EXT_ID}-`) && name !== EXT_DIR_NAME) {
+          try { fs.rmSync(path.join(extRoot, name), { recursive: true, force: true }); } catch { /* ignore */ }
+        }
+      }
     } catch (err: unknown) {
       console.warn(`VigilCLI: failed to install extension to ${dest}:`, (err as Error).message);
     }
@@ -700,7 +765,7 @@ function createWindow(): void {
 
   // ── Renderer ready ──
   listWin.webContents.on("did-finish-load", () => {
-    sendSessionsUpdate();
+    flushSessionsUpdate(true);
     if (dndEnabled) listWin!.webContents.send(IpcChannels.DND_CHANGE, true);
     listWin!.webContents.send(IpcChannels.APPLY_PREFS, { theme, fontSize, orbSize, collapsed: listCollapsed, windowOpacity });
     // Show after the renderer has had one beat to snap the hidden window to orb size.
@@ -719,9 +784,19 @@ function createWindow(): void {
   });
 
   // Crash recovery
+  // Bounded: a deterministic crash (e.g. OOM) must not turn into a reload loop
+  const crashTimes: number[] = [];
   listWin.webContents.on("render-process-gone", (_, details) => {
     console.error("VigilCLI: listWin crashed:", details.reason);
-    listWin!.webContents.reload();
+    const now = Date.now();
+    while (crashTimes.length && now - crashTimes[0] > 60_000) crashTimes.shift();
+    crashTimes.push(now);
+    if (crashTimes.length > 3) {
+      console.error("VigilCLI: listWin crashed too often — not reloading");
+      return;
+    }
+    const delay = 500 * 2 ** (crashTimes.length - 1);
+    setTimeout(() => { if (listWin && !listWin.isDestroyed()) listWin.webContents.reload(); }, delay);
   });
 
   // Prevent accidental close (Cmd+W on macOS, Alt+F4 on Windows, etc.)
@@ -766,6 +841,16 @@ if (!gotTheLock) {
     reapplyMacVisibility();
   });
 
+  // Renderers only ever show local files: block navigation (e.g. a link or file
+  // dropped onto a window) and window.open so the preload bridge can't be
+  // exposed to foreign content.
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-navigate", (e, url) => {
+      if (!url.startsWith("file://")) e.preventDefault();
+    });
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  });
+
   if (isMac && app.dock) {
     const prefs = loadPrefs();
     if (prefs?.showDock !== true) app.dock.hide();
@@ -780,6 +865,8 @@ if (!gotTheLock) {
     // Codex CLI JSONL log monitor
     try {
       _codexMonitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
+        // Native Codex hooks already drive this session
+        if (codexHookSessions.has(sid)) return;
         if (state === "codex-permission") {
           applySessionEvent({
             sessionId: sid,
@@ -800,6 +887,9 @@ if (!gotTheLock) {
           agentId: "codex",
           title: extra.title ?? null,
         });
+      }, {
+        // Title changes must not replay the last state (duplicate completion sounds)
+        onTitleChange: (sid, title) => _state.updateSessionTitle(sid, title),
       });
       _codexMonitor.start();
     } catch (err: unknown) {

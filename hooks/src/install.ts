@@ -6,12 +6,14 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import {
-  buildPermissionUrl,
-  DEFAULT_SERVER_PORT,
-  PERMISSION_PATH,
-  readRuntimePort,
+  defaultExecFileAsync,
+  getOrCreateAuthToken,
+  AUTH_TOKEN_ENV,
+  isVigilCLIPermissionUrl,
+  readAuthToken,
   resolveNodeBin,
 } from "./server-config";
+import { resolveHookScriptPath, writeJsonAtomic } from "./shared/install-utils";
 
 const CORE_HOOKS = [
   "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
@@ -57,11 +59,22 @@ interface GetClaudeVersionOptions {
   execFileSync?: (cmd: string, args: string[], opts: object) => string;
 }
 
-function getClaudeVersion(options: GetClaudeVersionOptions = {}): VersionInfo {
-  const platform = options.platform ?? process.platform;
-  const homeDir = options.homeDir ?? os.homedir();
-  const execFileSync = options.execFileSync
-    ?? (require("child_process") as typeof import("child_process")).execFileSync as (c: string, a: string[], o: object) => string;
+interface DetectClaudeVersionAsyncOptions {
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  execFile?: (cmd: string, args: string[], opts: object) => Promise<{ stdout: string | Buffer }>;
+}
+
+// Cached result of the default (non-injected) Claude Code version lookup.
+let _claudeVersionCache: VersionInfo | undefined;
+let _claudeVersionPending: Promise<VersionInfo> | null = null;
+
+function clearClaudeVersionCache(): void {
+  _claudeVersionCache = undefined;
+  _claudeVersionPending = null;
+}
+
+function getClaudeCandidates(platform: NodeJS.Platform, homeDir: string): string[] {
   const candidates: string[] = [];
   if (platform === "darwin") {
     candidates.push(
@@ -72,25 +85,103 @@ function getClaudeVersion(options: GetClaudeVersionOptions = {}): VersionInfo {
     );
   }
   candidates.push("claude");
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
+  return [...new Set(candidates)];
+}
+
+function parseClaudeVersion(out: string, candidate: string): VersionInfo | null {
+  const match = out.match(CLAUDE_VERSION_PATTERN);
+  if (!match) return null;
+  return { version: match[1], source: candidate === "claude" ? "PATH:claude" : candidate, status: "known" };
+}
+
+/**
+ * Synchronous Claude Code version probe (execFileSync, up to 5 candidates × 5s).
+ * Blocks — inside Electron call detectClaudeVersionAsync() first; its cached result is reused here.
+ */
+function getClaudeVersion(options: GetClaudeVersionOptions = {}): VersionInfo {
+  const cacheable = options.platform === undefined && options.homeDir === undefined && options.execFileSync === undefined;
+  if (cacheable && _claudeVersionCache) return { ..._claudeVersionCache };
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? os.homedir();
+  const execFileSync = options.execFileSync
+    ?? (require("child_process") as typeof import("child_process")).execFileSync as (c: string, a: string[], o: object) => string;
+  let result: VersionInfo = { ...UNKNOWN_CLAUDE_VERSION };
+  for (const candidate of getClaudeCandidates(platform, homeDir)) {
     try {
       const out = execFileSync(candidate, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true }) as unknown as string;
-      const match = out.match(CLAUDE_VERSION_PATTERN);
-      if (!match) continue;
-      return { version: match[1], source: candidate === "claude" ? "PATH:claude" : candidate, status: "known" };
+      const parsed = parseClaudeVersion(String(out), candidate);
+      if (parsed) { result = parsed; break; }
     } catch {}
   }
-  return { ...UNKNOWN_CLAUDE_VERSION };
+  if (cacheable) _claudeVersionCache = { ...result };
+  return result;
+}
+
+/**
+ * Non-blocking Claude Code version probe (promisified execFile).
+ * The default lookup is cached module-wide and shared with the sync path used by registerHooks().
+ */
+export function detectClaudeVersionAsync(options: DetectClaudeVersionAsyncOptions = {}): Promise<VersionInfo> {
+  const cacheable = options.platform === undefined && options.homeDir === undefined && options.execFile === undefined;
+  if (cacheable) {
+    if (_claudeVersionCache) return Promise.resolve({ ..._claudeVersionCache });
+    if (_claudeVersionPending) return _claudeVersionPending.then((v) => ({ ...v }));
+  }
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? os.homedir();
+  const execFile = options.execFile ?? defaultExecFileAsync();
+  const run = async (): Promise<VersionInfo> => {
+    for (const candidate of getClaudeCandidates(platform, homeDir)) {
+      try {
+        const { stdout } = await execFile(candidate, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+        const parsed = parseClaudeVersion(String(stdout), candidate);
+        if (parsed) return parsed;
+      } catch {}
+    }
+    return { ...UNKNOWN_CLAUDE_VERSION };
+  };
+  const pending = run().catch(() => ({ ...UNKNOWN_CLAUDE_VERSION }) as VersionInfo).then((result) => {
+    if (cacheable) { _claudeVersionCache = { ...result }; _claudeVersionPending = null; }
+    return result;
+  });
+  if (cacheable) _claudeVersionPending = pending;
+  return pending.then((v) => ({ ...v }));
+}
+
+function versionInfoFromString(version: string | null): VersionInfo {
+  if (typeof version !== "string") return { ...UNKNOWN_CLAUDE_VERSION };
+  const match = version.match(CLAUDE_VERSION_PATTERN);
+  if (!match) return { ...UNKNOWN_CLAUDE_VERSION };
+  return { version: match[1], source: "provided", status: "known" };
 }
 
 // ── Marker strings ──
 const MARKER = "vigilcli-hook.js";
+const PERMISSION_MARKER = "permission-hook.js";
 const AUTO_START_MARKER = "auto-start.js";
 const LEGACY_AUTO_START_MARKER = "auto-start.sh";
-const HTTP_MARKER = PERMISSION_PATH;
+
+/**
+ * VigilCLI's auto-start hook. "auto-start.js" alone is too generic (other desktop
+ * pets ship one too), so also require a VigilCLI-looking path or our hooks/dist layout.
+ */
+function isVigilCLIAutoStartCommand(cmd: string): boolean {
+  if (cmd.includes(LEGACY_AUTO_START_MARKER)) return /vigil/i.test(cmd);
+  if (!cmd.includes(AUTO_START_MARKER)) return false;
+  const normalized = cmd.replace(/\\/g, "/");
+  return /vigil/i.test(normalized) || normalized.includes("hooks/dist/auto-start.js");
+}
+
+/** VigilCLI's PermissionRequest command hook (same ownership rule as auto-start). */
+function isVigilCLIPermissionCommand(cmd: string): boolean {
+  if (!cmd.includes(PERMISSION_MARKER)) return false;
+  const normalized = cmd.replace(/\\/g, "/");
+  return /vigil/i.test(normalized) || normalized.includes(`hooks/dist/${PERMISSION_MARKER}`);
+}
+
+function isVigilCLICommand(cmd: string): boolean {
+  return cmd.includes(MARKER) || isVigilCLIAutoStartCommand(cmd) || isVigilCLIPermissionCommand(cmd);
+}
 
 function extractNodeBinFromSettings(settings: Record<string, unknown>, marker: string): string | null {
   if (!settings || !settings.hooks) return null;
@@ -139,10 +230,15 @@ function forEachCommandHook(entries: unknown[], visitor: Visitor): void {
   }
 }
 
-function syncCommandHook(entries: unknown[], marker: string, expectedCommand: string): { found: boolean; changed: boolean } {
+function syncCommandHook(
+  entries: unknown[],
+  marker: string,
+  expectedCommand: string,
+  isOwned: (cmd: string) => boolean = () => true,
+): { found: boolean; changed: boolean } {
   let found = false; let changed = false;
   forEachCommandHook(entries, (command, update) => {
-    if (!command.includes(marker)) return;
+    if (!command.includes(marker) || !isOwned(command)) return;
     found = true;
     if (command !== expectedCommand) { update(expectedCommand); changed = true; }
   });
@@ -170,59 +266,56 @@ function removeMatchingCommandHooks(entries: unknown[], predicate: (cmd: string)
   return { entries: nextEntries, removed, changed };
 }
 
-function writeJsonAtomic(filePath: string, data: unknown): void {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmpPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch {}
-    throw err;
-  }
+type HttpHook = Record<string, unknown> & { type?: unknown; url?: unknown; headers?: unknown };
+
+/** Legacy (pre-command) VigilCLI PermissionRequest http hook — migrated away on register. */
+function isVigilCLIHttpHook(hook: unknown): boolean {
+  if (!hook || typeof hook !== "object") return false;
+  const h = hook as HttpHook;
+  return h.type === "http" && isVigilCLIPermissionUrl(h.url);
 }
 
-function syncHttpHook(entries: unknown[], expectedUrl: string): { found: boolean; changed: boolean } {
-  let found = false; let changed = false;
-  if (!Array.isArray(entries)) return { found, changed };
+/** Drop our legacy http hooks from `entries` (top-level or nested). Foreign http hooks are kept. */
+function removeVigilCLIHttpHooks(entries: unknown[]): { entries: unknown[]; removed: number } {
+  let removed = 0;
+  const next: unknown[] = [];
   for (const entry of entries) {
-    if (!entry || typeof entry !== "object") continue;
-    const e = entry as Record<string, unknown>;
-    if (e.type === "http" && typeof e.url === "string" && (e.url as string).includes(HTTP_MARKER)) {
-      found = true;
-      if (e.url !== expectedUrl) { e.url = expectedUrl; changed = true; }
-    }
-    if (!Array.isArray(e.hooks)) continue;
-    for (const hook of e.hooks as Record<string, unknown>[]) {
-      if (!hook || hook.type !== "http" || typeof hook.url !== "string" || !(hook.url as string).includes(HTTP_MARKER)) continue;
-      found = true;
-      if (hook.url !== expectedUrl) { hook.url = expectedUrl; changed = true; }
-    }
+    if (!entry || typeof entry !== "object") { next.push(entry); continue; }
+    if (isVigilCLIHttpHook(entry)) { removed++; continue; }
+    const e = entry as HookEntry;
+    if (!Array.isArray(e.hooks)) { next.push(entry); continue; }
+    const kept = (e.hooks as unknown[]).filter((h) => !isVigilCLIHttpHook(h));
+    if (kept.length === e.hooks.length) { next.push(entry); continue; }
+    removed += e.hooks.length - kept.length;
+    if (kept.length === 0 && typeof e.command !== "string") continue;
+    next.push({ ...e, hooks: kept });
   }
-  return { found, changed };
+  return { entries: next, removed };
 }
 
-function getHookServerPort(explicitPort?: number): number {
-  return Number.isInteger(explicitPort) ? explicitPort! : (readRuntimePort() ?? DEFAULT_SERVER_PORT);
-}
-
-const HTTP_HOOKS: Record<string, { matcher: string; hook: Record<string, unknown> }> = {
-  PermissionRequest: {
-    matcher: "",
-    hook: { type: "http", url: "http://127.0.0.1:23333/permission", timeout: 600 },
-  },
-};
+/** Claude Code PermissionRequest: blocking command hook (no port / token baked into settings). */
+const PERMISSION_EVENT = "PermissionRequest";
+const PERMISSION_TIMEOUT_SEC = 600;
 
 interface RegisterHooksOptions {
   silent?: boolean;
   autoStart?: boolean;
   remote?: boolean;
+  /** @deprecated Ignored: hooks discover the port at runtime (runtime.json + candidates). */
   port?: number;
   settingsPath?: string;
   nodeBin?: string | null;
+  /** Pre-detected Claude Code version (e.g. from detectClaudeVersionAsync()); null = unknown. Skips detection. */
+  claudeVersion?: string | null;
   claudeVersionInfo?: VersionInfo;
+  /** App executable (process.execPath) or .app bundle; baked into the auto-start command as --app. */
+  appPath?: string | null;
+  /**
+   * Remote mode only: token baked into commands as VIGILCLI_TOKEN. undefined → getOrCreateAuthToken()
+   * (local; ensures ~/.vigilcli/auth-token exists for the hook scripts) / readAuthToken() (remote).
+   * Local installs never write the token into settings.json.
+   */
+  authToken?: string | null;
 }
 
 interface RegisterHooksResult {
@@ -235,12 +328,34 @@ interface RegisterHooksResult {
   versionSource: string | null;
 }
 
+function shellQuoteEnvValue(value: string): string {
+  return /^[A-Za-z0-9_.:\/-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function resolveAuthTokenOption(options: RegisterHooksOptions): string | null {
+  if (options.authToken !== undefined) return options.authToken;
+  // Remote hosts talk to the local server through a tunnel: never mint a token there.
+  if (options.remote) return readAuthToken();
+  try { return getOrCreateAuthToken(); } catch { return null; }
+}
+
+function resolveAppPathOption(options: RegisterHooksOptions): string | null {
+  // AppImage: process.execPath lives in a transient /tmp/.mount_XXX — relaunch the .AppImage itself.
+  if (process.env.APPIMAGE) return process.env.APPIMAGE;
+  return options.appPath || null;
+}
+
+function removeAutoStartHooks(hooks: Record<string, unknown[]>): number {
+  if (!Array.isArray(hooks.SessionStart)) return 0;
+  const result = removeMatchingCommandHooks(hooks.SessionStart, isVigilCLIAutoStartCommand);
+  if (result.changed) hooks.SessionStart = result.entries;
+  return result.removed;
+}
+
 export function registerHooks(options: RegisterHooksOptions = {}): RegisterHooksResult {
   const settingsPath = options.settingsPath ?? path.join(os.homedir(), ".claude", "settings.json");
-  const hookPort = getHookServerPort(options.port);
-  // Hooks now live in hooks/dist/ (bundle output), not hooks/ directly
-  let hookScript = path.resolve(__dirname, "..", "dist", "vigilcli-hook.js").replace(/\\/g, "/");
-  hookScript = hookScript.replace("app.asar/", "app.asar.unpacked/");
+  // Hooks live in hooks/dist/ (bundle output); copied to ~/.vigilcli/hooks under AppImage
+  const hookScript = resolveHookScriptPath("vigilcli-hook.js", __dirname);
 
   let settings: Record<string, unknown> = {};
   try {
@@ -248,16 +363,18 @@ export function registerHooks(options: RegisterHooksOptions = {}): RegisterHooks
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Failed to read settings.json: ${(err as Error).message}`);
   }
-  if (!settings.hooks) settings.hooks = {};
+  if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) settings.hooks = {};
   const hooks = settings.hooks as Record<string, unknown[]>;
 
   const resolved = options.nodeBin !== undefined ? options.nodeBin : resolveNodeBin();
   const nodeBin = resolved ?? extractNodeBinFromSettings(settings, MARKER) ?? "node";
+  const authToken = resolveAuthTokenOption(options);
 
   let added = 0, skipped = 0, versionSkipped = 0, updated = 0, removed = 0;
   let changed = false;
 
-  const versionInfo = options.claudeVersionInfo ?? getClaudeVersion();
+  const versionInfo = options.claudeVersionInfo
+    ?? (options.claudeVersion !== undefined ? versionInfoFromString(options.claudeVersion) : getClaudeVersion());
   const supported: typeof VERSIONED_HOOKS = [];
   const unsupported: typeof VERSIONED_HOOKS = [];
   for (const hook of VERSIONED_HOOKS) {
@@ -277,12 +394,13 @@ export function registerHooks(options: RegisterHooksOptions = {}): RegisterHooks
   }
 
   const hookEvents = [...CORE_HOOKS, ...supported.map((h) => h.event)];
+  const remotePrefix = options.remote
+    ? `VIGILCLI_REMOTE=1 ${authToken ? `${AUTH_TOKEN_ENV}=${shellQuoteEnvValue(authToken)} ` : ""}`
+    : "";
 
   for (const event of hookEvents) {
     if (!Array.isArray(hooks[event])) { hooks[event] = []; changed = true; }
-    const desiredCommand = options.remote
-      ? `VIGILCLI_REMOTE=1 "${nodeBin}" "${hookScript}" ${event}`
-      : `"${nodeBin}" "${hookScript}" ${event}`;
+    const desiredCommand = `${remotePrefix}"${nodeBin}" "${hookScript}" ${event}`;
     const sync = syncCommandHook(hooks[event], MARKER, desiredCommand);
     if (sync.found) { if (sync.changed) { updated++; changed = true; } else { skipped++; } continue; }
     hooks[event].push({ matcher: "", hooks: [{ type: "command", command: desiredCommand }] });
@@ -291,37 +409,41 @@ export function registerHooks(options: RegisterHooksOptions = {}): RegisterHooks
 
   if (options.autoStart) {
     if (!Array.isArray(hooks.SessionStart)) { hooks.SessionStart = []; changed = true; }
-    let autoStartScript = path.resolve(__dirname, "..", "dist", "auto-start.js").replace(/\\/g, "/");
-    autoStartScript = autoStartScript.replace("app.asar/", "app.asar.unpacked/");
-    const autoStartCommand = `"${nodeBin}" "${autoStartScript}"`;
-    const autoSync = syncCommandHook(hooks.SessionStart, AUTO_START_MARKER, autoStartCommand);
+    const autoStartScript = resolveHookScriptPath("auto-start.js", __dirname);
+    const appPath = resolveAppPathOption(options);
+    const autoStartCommand = appPath
+      ? `"${nodeBin}" "${autoStartScript}" --app "${appPath.replace(/\\/g, "/")}"`
+      : `"${nodeBin}" "${autoStartScript}"`;
+    // Drop legacy auto-start.sh entries first
+    const legacy = removeMatchingCommandHooks(hooks.SessionStart,
+      (cmd) => cmd.includes(LEGACY_AUTO_START_MARKER) && isVigilCLIAutoStartCommand(cmd));
+    if (legacy.changed) { hooks.SessionStart = legacy.entries; removed += legacy.removed; changed = true; }
+    const autoSync = syncCommandHook(hooks.SessionStart, AUTO_START_MARKER, autoStartCommand, isVigilCLIAutoStartCommand);
     if (!autoSync.found) { hooks.SessionStart.unshift({ matcher: "", hooks: [{ type: "command", command: autoStartCommand }] }); added++; }
     else if (autoSync.changed) { updated++; changed = true; }
     else { skipped++; }
-    const beforeLen = hooks.SessionStart.length;
-    hooks.SessionStart = hooks.SessionStart.filter((entry) => {
-      if (!entry || typeof entry !== "object") return true;
-      const e = entry as HookEntry;
-      if (typeof e.command === "string" && e.command.includes(LEGACY_AUTO_START_MARKER)) return false;
-      if (Array.isArray(e.hooks) && e.hooks.some((h) => typeof h.command === "string" && h.command.includes(LEGACY_AUTO_START_MARKER))) return false;
-      return true;
-    });
-    if (hooks.SessionStart.length < beforeLen) changed = true;
+  } else if (options.autoStart === false) {
+    const count = removeAutoStartHooks(hooks);
+    if (count > 0) { removed += count; changed = true; }
   }
 
-  for (const event of Object.keys(HTTP_HOOKS)) {
-    if (!Array.isArray(hooks[event])) continue;
-    const result = removeMatchingCommandHooks(hooks[event], (cmd) => cmd.includes(MARKER));
-    if (result.changed) { hooks[event] = result.entries as unknown[]; removed += result.removed; changed = true; }
+  // PermissionRequest: old vigilcli-hook.js entries and legacy http hooks → one command hook
+  if (Array.isArray(hooks[PERMISSION_EVENT])) {
+    const stale = removeMatchingCommandHooks(hooks[PERMISSION_EVENT], (cmd) => cmd.includes(MARKER));
+    if (stale.changed) { hooks[PERMISSION_EVENT] = stale.entries as unknown[]; removed += stale.removed; changed = true; }
+    const legacyHttp = removeVigilCLIHttpHooks(hooks[PERMISSION_EVENT]);
+    if (legacyHttp.removed) { hooks[PERMISSION_EVENT] = legacyHttp.entries; removed += legacyHttp.removed; changed = true; }
   }
-
-  for (const [event, { matcher, hook }] of Object.entries(HTTP_HOOKS)) {
-    if (!Array.isArray(hooks[event])) { hooks[event] = []; changed = true; }
-    const desiredHook = { ...hook, url: buildPermissionUrl(hookPort) };
-    const httpSync = syncHttpHook(hooks[event], desiredHook.url as string);
-    if (httpSync.found) { if (httpSync.changed) { updated++; changed = true; } else { skipped++; } continue; }
-    hooks[event].push({ matcher, hooks: [desiredHook] });
-    added++;
+  {
+    if (!Array.isArray(hooks[PERMISSION_EVENT])) { hooks[PERMISSION_EVENT] = []; changed = true; }
+    const permissionScript = resolveHookScriptPath(PERMISSION_MARKER, __dirname);
+    const permissionCommand = `${remotePrefix}"${nodeBin}" "${permissionScript}" --agent claude-code`;
+    const permSync = syncCommandHook(hooks[PERMISSION_EVENT], PERMISSION_MARKER, permissionCommand, isVigilCLIPermissionCommand);
+    if (permSync.found) { if (permSync.changed) { updated++; changed = true; } else { skipped++; } }
+    else {
+      hooks[PERMISSION_EVENT].push({ matcher: "", hooks: [{ type: "command", command: permissionCommand, timeout: PERMISSION_TIMEOUT_SEC }] });
+      added++;
+    }
   }
 
   if (added > 0 || changed) writeJsonAtomic(settingsPath, settings);
@@ -337,51 +459,45 @@ export function registerHooks(options: RegisterHooksOptions = {}): RegisterHooks
   return { added, skipped, updated, removed, version: versionInfo.version, versionStatus: versionInfo.status, versionSource: versionInfo.source };
 }
 
-export function unregisterAutoStart(): boolean {
-  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
-  let settings: Record<string, unknown>;
+function readSettingsFile(settingsPath: string): Record<string, unknown> | null {
   try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-  } catch { return false; }
-  const hooks = settings.hooks as Record<string, unknown[]> | undefined;
-  const arr = hooks?.SessionStart;
-  if (!Array.isArray(arr)) return false;
-  const before = arr.length;
-  hooks!.SessionStart = arr.filter((entry) => {
-    if (!entry || typeof entry !== "object") return true;
-    const e = entry as HookEntry;
-    if (typeof e.command === "string" && (e.command.includes(AUTO_START_MARKER) || e.command.includes(LEGACY_AUTO_START_MARKER))) return false;
-    if (Array.isArray(e.hooks) && e.hooks.some((h) => typeof h.command === "string" && (h.command.includes(AUTO_START_MARKER) || h.command.includes(LEGACY_AUTO_START_MARKER)))) return false;
-    return true;
-  });
-  if (hooks!.SessionStart.length < before) { writeJsonAtomic(settingsPath, settings); return true; }
+    const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+function getHooksObject(settings: Record<string, unknown>): Record<string, unknown[]> | null {
+  const hooks = settings.hooks;
+  return hooks && typeof hooks === "object" && !Array.isArray(hooks) ? hooks as Record<string, unknown[]> : null;
+}
+
+export function unregisterAutoStart(settingsPath?: string): boolean {
+  const filePath = settingsPath ?? path.join(os.homedir(), ".claude", "settings.json");
+  const settings = readSettingsFile(filePath);
+  if (!settings) return false;
+  const hooks = getHooksObject(settings);
+  if (!hooks) return false;
+  if (removeAutoStartHooks(hooks) > 0) { writeJsonAtomic(filePath, settings); return true; }
   return false;
 }
 
-export function isAutoStartRegistered(): boolean {
-  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-    const hooks = settings.hooks as Record<string, unknown[]> | undefined;
-    const arr = hooks?.SessionStart;
-    if (!Array.isArray(arr)) return false;
-    return arr.some((entry) => {
-      if (!entry || typeof entry !== "object") return false;
-      const e = entry as HookEntry;
-      if (typeof e.command === "string" && e.command.includes(AUTO_START_MARKER)) return true;
-      if (Array.isArray(e.hooks) && e.hooks.some((h) => typeof h.command === "string" && h.command.includes(AUTO_START_MARKER))) return true;
-      return false;
-    });
-  } catch { return false; }
+export function isAutoStartRegistered(settingsPath?: string): boolean {
+  const filePath = settingsPath ?? path.join(os.homedir(), ".claude", "settings.json");
+  const settings = readSettingsFile(filePath);
+  const hooks = settings && getHooksObject(settings);
+  const arr = hooks?.SessionStart;
+  if (!Array.isArray(arr)) return false;
+  let found = false;
+  forEachCommandHook(arr, (cmd) => { if (cmd.includes(AUTO_START_MARKER) && isVigilCLIAutoStartCommand(cmd)) found = true; });
+  return found;
 }
 
 export function unregisterVigilCLIHooks(settingsPath?: string): number {
   const filePath = settingsPath ?? path.join(os.homedir(), ".claude", "settings.json");
-  let settings: Record<string, unknown>;
-  try { settings = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>; }
-  catch { return 0; }
-  const hooks = settings.hooks as Record<string, unknown[]> | undefined;
-  if (!hooks || typeof hooks !== "object") return 0;
+  const settings = readSettingsFile(filePath);
+  if (!settings) return 0;
+  const hooks = getHooksObject(settings);
+  if (!hooks) return 0;
   let removed = 0, changed = false;
   for (const event of Object.keys(hooks)) {
     const arr = hooks[event];
@@ -391,14 +507,18 @@ export function unregisterVigilCLIHooks(settingsPath?: string): number {
       if (!entry || typeof entry !== "object") { next.push(entry); continue; }
       const e = entry as HookEntry & { type?: string; url?: string };
       const topCmd = typeof e.command === "string" ? e.command : "";
-      if (topCmd.includes(MARKER) || topCmd.includes(AUTO_START_MARKER) || topCmd.includes(LEGACY_AUTO_START_MARKER)) { removed++; changed = true; continue; }
+      if (topCmd && isVigilCLICommand(topCmd)) { removed++; changed = true; continue; }
+      if (isVigilCLIHttpHook(e)) { removed++; changed = true; continue; }
       if (!Array.isArray(e.hooks)) { next.push(entry); continue; }
-      const filtered = (e.hooks as Array<{ command?: string; type?: string; url?: string }>).filter((h) => {
-        if (h.command?.includes(MARKER) || h.command?.includes(AUTO_START_MARKER) || h.command?.includes(LEGACY_AUTO_START_MARKER)) { removed++; changed = true; return false; }
-        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) { removed++; changed = true; return false; }
+      const filtered = (e.hooks as unknown[]).filter((h) => {
+        if (!h || typeof h !== "object") return true;
+        const cmd = (h as { command?: unknown }).command;
+        if (typeof cmd === "string" && isVigilCLICommand(cmd)) { removed++; changed = true; return false; }
+        if (isVigilCLIHttpHook(h)) { removed++; changed = true; return false; }
         return true;
       });
-      if (filtered.length !== e.hooks.length) changed = true;
+      if (filtered.length === e.hooks.length) { next.push(entry); continue; }
+      changed = true;
       if (filtered.length === 0 && !topCmd) continue;
       next.push({ ...e, hooks: filtered });
     }
@@ -408,16 +528,30 @@ export function unregisterVigilCLIHooks(settingsPath?: string): number {
   return removed;
 }
 
+export type { VersionInfo, RegisterHooksOptions, RegisterHooksResult };
+
 export const __test = {
   getClaudeVersion,
+  clearClaudeVersionCache,
   versionLessThan,
   removeMatchingCommandHooks,
+  isVigilCLIAutoStartCommand,
 };
+
+function readArgValue(argv: string[], flag: string): string | undefined {
+  const i = argv.indexOf(flag);
+  if (i !== -1 && i + 1 < argv.length) return argv[i + 1];
+  const prefixed = argv.find((a) => a.startsWith(`${flag}=`));
+  return prefixed ? prefixed.slice(flag.length + 1) : undefined;
+}
 
 if (require.main === module) {
   try {
-    const remote = process.argv.includes("--remote");
-    registerHooks({ remote });
+    const argv = process.argv.slice(2);
+    const remote = argv.includes("--remote");
+    // Remote hosts: token comes from --token <value> or VIGILCLI_TOKEN (see readAuthToken)
+    const token = readArgValue(argv, "--token")?.trim();
+    registerHooks({ remote, ...(token ? { authToken: token } : {}) });
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

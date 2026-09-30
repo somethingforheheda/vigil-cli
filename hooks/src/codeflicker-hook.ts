@@ -5,6 +5,7 @@
 
 import { postStateToRunningServer, readHostPrefix } from "./server-config";
 import { findTerminalPid, getDetectedEditor, getAgentPid, getPidChain, isHeadless } from "./shared/find-terminal-pid";
+import { readTranscriptTitle, TITLE_EVENTS, trimToolInput } from "./shared/hook-payload";
 
 const EVENT_TO_STATE: Record<string, string> = {
   SessionStart: "idle",
@@ -49,26 +50,14 @@ process.stdin.on("end", () => {
     // Read custom-title from CodeflickerCLI JSONL log (same pattern as vigilcli-hook reads transcript_path)
     // JSONL path: ~/.codeflicker/projects/<cwd-slug>/<sessionId>.jsonl
     // slug = cwd without leading "/" with "/" replaced by "-", lowercased
-    if (!sessionTitle && cwd && sessionId && sessionId !== "default") {
+    const titleEvent = event || String(payload.hook_event_name ?? "");
+    if (!sessionTitle && cwd && sessionId && sessionId !== "default" && TITLE_EVENTS.has(titleEvent)) {
       try {
-        const fs = require("fs") as typeof import("fs");
         const os = require("os") as typeof import("os");
         const cfPath = require("path") as typeof import("path");
         const slug = cwd.replace(/^\//, "").replace(/\//g, "-").toLowerCase();
         const jsonlPath = cfPath.join(os.homedir(), ".codeflicker", "projects", slug, `${sessionId}.jsonl`);
-        const stat = fs.statSync(jsonlPath);
-        if (stat.size < 5 * 1024 * 1024) {
-          const content = fs.readFileSync(jsonlPath, "utf8");
-          let lastCustom = "", lastAi = "";
-          for (const line of content.split("\n")) {
-            if (line.includes('"type":"custom-title"')) {
-              try { lastCustom = (JSON.parse(line) as Record<string, unknown>).customTitle as string ?? ""; } catch {}
-            } else if (line.includes('"type":"ai-title"')) {
-              try { lastAi = (JSON.parse(line) as Record<string, unknown>).aiTitle as string ?? ""; } catch {}
-            }
-          }
-          sessionTitle = lastCustom || lastAi;
-        }
+        sessionTitle = readTranscriptTitle(jsonlPath);
       } catch {}
     }
 
@@ -82,7 +71,7 @@ process.stdin.on("end", () => {
 
     // Rich hook fields (same field names as Claude Code)
     const toolName = payload.tool_name != null ? String(payload.tool_name) : undefined;
-    const toolInput = payload.tool_input !== undefined ? payload.tool_input : undefined;
+    const toolInput = trimToolInput(payload.tool_input);
     const toolUseId = payload.tool_use_id != null ? String(payload.tool_use_id) : undefined;
     const error = payload.error != null ? String(payload.error) : undefined;
     const agentType = payload.agent_type != null ? String(payload.agent_type) : undefined;

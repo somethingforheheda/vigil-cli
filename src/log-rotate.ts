@@ -9,7 +9,12 @@ export const DEFAULT_MAX_BYTES = 1024 * 1024; // 1 MB
  * truncate it to keep roughly the newest half (cut at a newline boundary).
  */
 export function rotatedAppend(filePath: string, line: string, maxBytes = DEFAULT_MAX_BYTES): void {
-  fs.appendFileSync(filePath, line);
+  // Logging must never throw into callers (e.g. an HTTP request handler)
+  try {
+    fs.appendFileSync(filePath, line);
+  } catch {
+    return;
+  }
 
   let size: number;
   try {
@@ -28,5 +33,5 @@ export function rotatedAppend(filePath: string, line: string, maxBytes = DEFAULT
   const half = Math.floor(buf.length / 2);
   const nl = buf.indexOf(0x0a, half); // first \n after midpoint
   if (nl === -1 || nl >= buf.length - 1) return;
-  fs.writeFileSync(filePath, buf.slice(nl + 1));
+  try { fs.writeFileSync(filePath, buf.slice(nl + 1)); } catch { /* ignore */ }
 }

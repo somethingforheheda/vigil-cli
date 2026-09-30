@@ -106,7 +106,10 @@ const i18n = {
     orbSizeLarge: "Large (88px)",
     sessionCap: "Session Limit",
     clearAllHooks: "Clear Hook Configs…",
-    clearAllHooksConfirm: "Remove all VigilCLI hook entries from Claude Code, Cursor, Gemini, CodeFlicker, and CodeBuddy config files?",
+    clearAllHooksConfirm: "Remove all VigilCLI hook entries from Claude Code, Codex, Cursor, Gemini, CodeFlicker, and CodeBuddy config files?",
+    codexHooksNeedTrust: "⚠ Codex hooks need approval…",
+    codexHooksDisabled: "⚠ Codex hooks are disabled in config.toml",
+    codexHooksTrustDetail: "VigilCLI registered hooks in ~/.codex/hooks.json for live status and permission bubbles.\n\nCodex only runs hooks you approve: open Codex, run /hooks and trust the VigilCLI entries. Until then Codex sessions fall back to log monitoring (no permission bubbles).",
     clearAllHooksDone: "Done — removed {n} hook entries.\n\nRestart VigilCLI to re-register hooks.",
   },
   zh: {
@@ -165,7 +168,10 @@ const i18n = {
     orbSizeLarge: "大 (88px)",
     sessionCap: "会话上限",
     clearAllHooks: "清空 Hook 配置…",
-    clearAllHooksConfirm: "将清空 Claude Code、Cursor、Gemini、CodeFlicker、CodeBuddy 配置文件中所有 VigilCLI hook 条目，确认继续？",
+    clearAllHooksConfirm: "将清空 Claude Code、Codex、Cursor、Gemini、CodeFlicker、CodeBuddy 配置文件中所有 VigilCLI hook 条目，确认继续？",
+    codexHooksNeedTrust: "⚠ Codex hooks 待授权…",
+    codexHooksDisabled: "⚠ Codex hooks 已在 config.toml 中关闭",
+    codexHooksTrustDetail: "VigilCLI 已在 ~/.codex/hooks.json 注册 hooks，用于实时状态和权限气泡。\n\nCodex 只运行你授权过的 hooks：打开 Codex，执行 /hooks 并信任 VigilCLI 的条目。授权前 Codex 会话退回日志监控（没有权限气泡）。",
     clearAllHooksDone: "完成，共清除 {n} 条 hook 记录。\n\n重启 VigilCLI 可重新注册 hooks。",
   },
 } as const;
@@ -252,6 +258,26 @@ export function initMenu(ctx: MenuContext): {
     ctx.savePrefs();
   }
 
+  // Codex runs only hooks the user trusted via /hooks — surface that, since
+  // until then Codex sessions silently fall back to log polling.
+  function codexHooksMenuItems(): Electron.MenuItemConstructorOptions[] {
+    const status = ctx.getCodexHooksStatus();
+    if (!status || !status.registered) return [];
+    if (status.disabledByConfig) return [{ label: t("codexHooksDisabled"), enabled: false }];
+    if (status.trusted !== false) return [];
+    return [{
+      label: t("codexHooksNeedTrust"),
+      click: () => {
+        void dialog.showMessageBox({
+          type: "info",
+          buttons: ["OK"],
+          message: t("codexHooksNeedTrust").replace("⚠ ", "").replace("…", ""),
+          detail: t("codexHooksTrustDetail"),
+        });
+      },
+    }];
+  }
+
   function buildTrayMenu(): void {
     if (!ctx.tray) return;
     const items: Electron.MenuItemConstructorOptions[] = [
@@ -321,25 +347,15 @@ export function initMenu(ctx: MenuContext): {
         checked: ctx.autoStartWithClaude,
         click: (menuItem) => {
           ctx.autoStartWithClaude = menuItem.checked;
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const { registerHooks, unregisterAutoStart } = require("../hooks/install.js") as {
-              registerHooks(opts: { silent: boolean; autoStart: boolean; port: number }): void;
-              unregisterAutoStart(): void;
-            };
-            if (ctx.autoStartWithClaude) {
-              registerHooks({ silent: true, autoStart: true, port: ctx.getHookServerPort() });
-            } else {
-              unregisterAutoStart();
-            }
-          } catch (err: unknown) {
-            console.warn("VigilCLI: failed to toggle auto-start hook:", (err as Error).message);
-          }
+          // Full sync adds or removes the auto-start entry to match the pref
+          // (and reuses the server's cached node / app paths).
+          ctx.syncVigilCLIHooks();
           ctx.savePrefs();
           buildTrayMenu();
           buildContextMenu();
         },
       },
+      ...codexHooksMenuItems(),
       {
         label: t("clearAllHooks"),
         click: async () => {
@@ -352,6 +368,7 @@ export function initMenu(ctx: MenuContext): {
             detail: t("clearAllHooksConfirm"),
           });
           if (response !== 1) return;
+          ctx.suspendHookRestore();
           try {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             const { clearAllVigilCLIHooks } = require("../hooks/dist/clear-all-hooks") as {

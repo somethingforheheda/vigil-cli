@@ -30,7 +30,7 @@ VigilCLI 常驻菜单栏，实时展示所有 AI 编程会话的运行状态。�
 
 ### 会话监控
 - **实时会话列表** — 浮窗卡片面板，显示每个 AI 会话的状态（运行中 / 等待 / 错误 / 通知）、工作目录、运行时长、子 Agent 数量
-- **点击聚焦** — 点击任意卡片，自动跳转到对应的终端窗口（macOS 支持 VS Code / Cursor 终端）
+- **点击聚焦** — 点击任意卡片，自动跳转到对应的终端窗口；在 VS Code / Cursor 中，内置的 *VigilCLI Terminal Focus* 扩展（自动安装到 `~/.vscode/extensions` / `~/.cursor/extensions`）还会切换到对应的集成终端标签页
 - **动态高度** — 空闲时收缩为细条，随会话增加平滑展开（最多 5 张卡片，超出可滚动）
 
 ### 权限气泡
@@ -39,8 +39,11 @@ VigilCLI 常驻菜单栏，实时展示所有 AI 编程会话的运行状态。�
 - **气泡跟随窗口** — 气泡跟踪会话卡片位置，跨显示器移动也不会错位
 
 ### Codex CLI 支持
-- **零配置日志监控** — 自动检测并读取 Codex JSONL 日志，无需安装任何 Hook
-- **会话名称显示** — 展示通过 `/rename` 设置的 Codex 会话名称
+- **原生 Hook** — 自动注册到 `~/.codex/hooks.json`：实时状态、中断事件、点击卡片跳回终端，以及**权限气泡**（单次允许 / 拒绝）
+- **首次需授权** — Codex 只运行用户信任过的 hook：打开 Codex 执行 `/hooks`，信任 VigilCLI 的条目即可（托盘菜单会提示）。hook 定义保持稳定，升级 VigilCLI 通常无需重新授权
+- **日志兜底** — 未授权或旧版 Codex 时，退回轮询 JSONL 会话日志（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`），此时没有权限气泡
+- **会话名称显示** — 展示通过 `/rename` 设置的 Codex 会话名称（读取 `~/.codex/session_index.jsonl`）
+- **限制** — Codex 暂不支持 hook 写入权限规则，因此 Codex 气泡没有「始终允许」类建议按钮
 
 ### 个性化设置
 | 选项 | 可选值 |
@@ -63,9 +66,10 @@ VigilCLI 常驻菜单栏，实时展示所有 AI 编程会话的运行状态。�
 | 平台 | 文件 |
 |------|------|
 | macOS (Apple Silicon) | `VigilCLI-*-arm64.dmg` |
-| macOS (Intel) | `VigilCLI-*-x64.dmg` |
 | Windows | `VigilCLI-Setup-*.exe` |
 | Linux | `VigilCLI-*.AppImage` 或 `.deb` |
+
+> macOS 仅发布 Apple Silicon（arm64）安装包。Intel Mac 用户请从源码运行（见[从源码构建](#从源码构建)）。
 
 ### macOS：跳过安全拦截
 
@@ -75,18 +79,22 @@ xattr -cr /Applications/VigilCLI.app
 
 ---
 
-## Hook 配置（Claude Code）
+## Hook 配置
 
-VigilCLI 通过 Hook 配置拦截 Claude Code 的工具调用，首次启动会自动安装。
+VigilCLI 启动时会自动注册 Hook：Claude Code（`~/.claude/settings.json`）、Codex（`~/.codex/hooks.json`），以及 Gemini CLI、Cursor Agent、CodeBuddy、CodeflickerCLI 各自的配置文件，无需手动操作。
 
-也可手动添加到 `.claude/settings.json`：
+权限审批使用 command hook `permission-hook.js`（Claude Code 与 Codex 共用）：脚本从 `~/.vigilcli/runtime.json` 读取当前端口，用 `~/.vigilcli/auth-token`（权限 0600）鉴权，并校验服务端返回的 HMAC 证明后才采纳决定——配置文件里不含端口和密钥，其他进程占用端口也无法冒充 VigilCLI 批准操作。VigilCLI 未运行时脚本静默退出，Claude Code / Codex 走正常的终端确认。
+
+**远程会话**（SSH 转发端口）：在远端执行 `node hooks/dist/install.js --remote --token <本机 ~/.vigilcli/auth-token 的内容>`，或在远端设置环境变量 `VIGILCLI_TOKEN`。
+
+作为参考，Claude Code 中的一条配置形如（每个事件一条）：
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": ".*",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -107,21 +115,27 @@ VigilCLI 通过 Hook 配置拦截 Claude Code 的工具调用，首次启动会�
 # 安装依赖
 npm install
 
-# 开发模式运行
-npm start
-
-# 打包 macOS（生成 arm64 DMG）
-npm run build:mac
-
-# 打包 Windows
+# 编译 TypeScript + Hooks（等同 `npm run build:all-ts`）
 npm run build
 
-# 打包 Linux
-npm run build:linux
+# 运行（加载编译后的 src/main.js；设置 VIGILCLI_DEV_TS=1 可通过 tsx 直接运行 .ts 源码）
+npm start
 
-# 编译 TypeScript + Hooks
-npm run build:all-ts
+# 类型检查与测试
+npm run typecheck
+npm test
+
+# 打包 macOS（仅 arm64 DMG）
+npm run build:mac
+
+# 打包 Windows（x64 NSIS 安装包）
+npm run build:win
+
+# 打包 Linux（AppImage + deb）
+npm run build:linux
 ```
+
+编译产物都提交在仓库里（`src/` / `agents/` 中每个 `.ts` 旁的 `.js`，以及 `hooks/dist/` 中的 esbuild 打包结果）；CI 会校验两者是否同步，修改 TypeScript 后请执行 `npm run build`。
 
 需要 **Node.js 18+** 和 **Electron 41**。
 
@@ -131,10 +145,13 @@ npm run build:all-ts
 
 | 工具 | 接入方式 | 会话检测 |
 |------|---------|---------|
-| Claude Code | PreToolUse Hook | ✅ |
-| Codex CLI | JSONL 日志监控 | ✅ |
-| Cursor | （计划中）| — |
-| Gemini CLI | 内置 Hook 安装器 | ✅ |
+| Claude Code | Hook（自动注册，支持权限气泡） | ✅ |
+| Codex CLI | Hook（自动注册，需在 `/hooks` 授权；支持权限气泡），日志监控兜底 | ✅ |
+| Gemini CLI | Hook（自动注册） | ✅ |
+| Cursor Agent | Hook（自动注册） | ✅ |
+| CodeBuddy | Hook（自动注册） | ✅ |
+| CodeflickerCLI | Hook（自动注册） | ✅ |
+| Copilot CLI | 附带 Hook 脚本（`hooks/dist/copilot-hook.js`），需手动配置 | ✅ |
 
 ---
 

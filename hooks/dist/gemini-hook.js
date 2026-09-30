@@ -37,6 +37,26 @@ var SERVER_PORTS = Array.from(
 );
 var STATE_PATH = "/state";
 var RUNTIME_CONFIG_PATH = path.join(os.homedir(), ".vigilcli", "runtime.json");
+var AUTH_HEADER = "x-vigilcli-token";
+var AUTH_TOKEN_PATH = path.join(os.homedir(), ".vigilcli", "auth-token");
+var AUTH_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+function normalizeAuthToken(value) {
+  if (typeof value !== "string") return null;
+  const token = value.trim();
+  return AUTH_TOKEN_PATTERN.test(token) ? token : null;
+}
+var AUTH_TOKEN_ENV = "VIGILCLI_TOKEN";
+function readAuthToken(filePath) {
+  if (filePath === void 0) {
+    const fromEnv = (process.env[AUTH_TOKEN_ENV] ?? "").trim();
+    if (fromEnv) return fromEnv;
+  }
+  try {
+    return normalizeAuthToken(fs.readFileSync(filePath ?? AUTH_TOKEN_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
 function normalizePort(value) {
   const port = Number(value);
   return Number.isInteger(port) && SERVER_PORTS.includes(port) ? port : null;
@@ -105,57 +125,91 @@ function splitPortCandidates(preferredPort, options = {}) {
   }
   return { direct, fallback, all };
 }
+function isSuccessStatus(res) {
+  const code = res.statusCode;
+  if (code === void 0) return true;
+  return code >= 200 && code < 300;
+}
 function probePort(port, timeoutMs, callback, options = {}) {
   const httpGet = options.httpGet ?? http.get;
-  const req = httpGet(
-    { hostname: "127.0.0.1", port, path: STATE_PATH, timeout: timeoutMs },
-    (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        if (body.length < 256) body += chunk;
-      });
-      res.on("end", () => callback(isVigilCLIResponse(res, body)));
-    }
-  );
-  req.on("error", () => callback(false));
+  let done = false;
+  const finish = (ok) => {
+    if (done) return;
+    done = true;
+    callback(ok);
+  };
+  let req;
+  try {
+    req = httpGet(
+      { hostname: "127.0.0.1", port, path: STATE_PATH, timeout: timeoutMs },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          if (body.length < 256) body += chunk;
+        });
+        res.on("end", () => finish(isSuccessStatus(res) && isVigilCLIResponse(res, body)));
+        res.on("error", () => finish(false));
+      }
+    );
+  } catch {
+    finish(false);
+    return;
+  }
+  req.on("error", () => finish(false));
   req.on("timeout", () => {
+    finish(false);
     req.destroy();
-    callback(false);
   });
 }
 function postStateToPort(port, payload, timeoutMs, callback, options = {}) {
   const httpRequest = options.httpRequest ?? http.request;
-  const req = httpRequest(
-    {
-      hostname: "127.0.0.1",
-      port,
-      path: STATE_PATH,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(payload)
+  const authToken = options.authToken !== void 0 ? options.authToken : readAuthToken();
+  let done = false;
+  const finish = (posted) => {
+    if (done) return;
+    done = true;
+    callback(posted, port);
+  };
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(payload)
+  };
+  if (authToken) headers[AUTH_HEADER] = authToken;
+  let req;
+  try {
+    req = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: STATE_PATH,
+        method: "POST",
+        headers,
+        timeout: timeoutMs
       },
-      timeout: timeoutMs
-    },
-    (res) => {
-      if (readHeader(res, VIGILCLI_SERVER_HEADER) === VIGILCLI_SERVER_ID) {
-        res.resume();
-        callback(true, port);
-        return;
+      (res) => {
+        if (readHeader(res, VIGILCLI_SERVER_HEADER) === VIGILCLI_SERVER_ID) {
+          res.resume();
+          finish(isSuccessStatus(res));
+          return;
+        }
+        let responseBody = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          if (responseBody.length < 256) responseBody += chunk;
+        });
+        res.on("end", () => finish(isSuccessStatus(res) && isVigilCLIResponse(res, responseBody)));
+        res.on("error", () => finish(false));
       }
-      let responseBody = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        if (responseBody.length < 256) responseBody += chunk;
-      });
-      res.on("end", () => callback(isVigilCLIResponse(res, responseBody), port));
-    }
-  );
-  req.on("error", () => callback(false, port));
+    );
+  } catch {
+    finish(false);
+    return;
+  }
+  req.on("error", () => finish(false));
   req.on("timeout", () => {
+    finish(false);
     req.destroy();
-    callback(false, port);
   });
   req.end(payload);
 }
@@ -165,6 +219,8 @@ function postStateToRunningServer(body, options, callback) {
   const { direct, fallback } = splitPortCandidates(options.preferredPort ?? null, options);
   const probe = options.probePort ?? probePort;
   const post = options.postStateToPort ?? postStateToPort;
+  const authToken = options.authToken !== void 0 ? options.authToken : readAuthToken();
+  const postOptions = { httpRequest: options.httpRequest, authToken };
   let directIndex = 0;
   let fallbackIndex = 0;
   const tryFallback = () => {
@@ -184,7 +240,7 @@ function postStateToRunningServer(body, options, callback) {
           return;
         }
         tryFallback();
-      }, { httpRequest: options.httpRequest });
+      }, postOptions);
     }, { httpGet: options.httpGet });
   };
   const tryDirect = () => {
@@ -199,7 +255,7 @@ function postStateToRunningServer(body, options, callback) {
         return;
       }
       tryDirect();
-    }, { httpRequest: options.httpRequest });
+    }, postOptions);
   };
   tryDirect();
 }
@@ -221,6 +277,31 @@ function isVigilCLIResponse(res, body) {
 // hooks/src/shared/find-terminal-pid.ts
 var import_child_process = require("child_process");
 var pathLib = __toESM(require("path"));
+function parsePsSnapshot(out) {
+  const table = /* @__PURE__ */ new Map();
+  for (const raw of out.split("\n")) {
+    const m = raw.match(/^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/);
+    if (!m) continue;
+    table.set(parseInt(m[1], 10), { ppid: parseInt(m[2], 10), comm: m[3] });
+  }
+  return table;
+}
+function readPsSnapshot() {
+  try {
+    const out = (0, import_child_process.execFileSync)("ps", ["-Ao", "pid=,ppid=,comm="], {
+      encoding: "utf8",
+      timeout: 1500,
+      maxBuffer: 16 * 1024 * 1024
+    });
+    const table = parsePsSnapshot(out);
+    return table.size ? table : null;
+  } catch {
+    return null;
+  }
+}
+function readUnixCommandLine(pid, timeout) {
+  return (0, import_child_process.execFileSync)("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout });
+}
 var TERMINAL_NAMES_WIN = /* @__PURE__ */ new Set([
   "windowsterminal.exe",
   "cmd.exe",
@@ -304,6 +385,7 @@ function findTerminalPid() {
   _pidChain = [];
   _detectedEditor = null;
   _agentPid = null;
+  const psTable = isWin ? null : readPsSnapshot();
   for (let i = 0; i < 8; i++) {
     let name, parentPid;
     try {
@@ -318,16 +400,16 @@ function findTerminalPid() {
         name = (parts[1] ?? "").trim().toLowerCase();
         parentPid = parseInt(parts[2] ?? "0", 10);
       } else {
-        const cp = require("child_process");
-        const ppidOut = cp.execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf8", timeout: 1e3 }).trim();
-        const commOut = cp.execSync(`ps -o comm= -p ${pid}`, { encoding: "utf8", timeout: 1e3 }).trim();
+        const info = psTable?.get(pid);
+        if (!info) break;
+        const commOut = info.comm;
         name = pathLib.basename(commOut).toLowerCase();
         if (!_detectedEditor) {
           const fullLower = commOut.toLowerCase();
           if (fullLower.includes("visual studio code")) _detectedEditor = "code";
           else if (fullLower.includes("cursor.app")) _detectedEditor = "cursor";
         }
-        parentPid = parseInt(ppidOut, 10);
+        parentPid = info.ppid;
       }
     } catch {
       break;
@@ -342,7 +424,7 @@ function findTerminalPid() {
           const cmdOut = isWin ? (0, import_child_process.execSync)(
             `wmic process where "ProcessId=${pid}" get CommandLine /format:csv`,
             { encoding: "utf8", timeout: 500, windowsHide: true }
-          ) : (0, import_child_process.execSync)(`ps -o command= -p ${pid}`, { encoding: "utf8", timeout: 500 });
+          ) : readUnixCommandLine(pid, 500);
           if (cmdOut.includes("claude-code") || cmdOut.includes("@anthropic-ai")) _agentPid = pid;
         } catch {
         }
@@ -359,7 +441,7 @@ function findTerminalPid() {
       const cmdOut = isWin ? (0, import_child_process.execSync)(
         `wmic process where "ProcessId=${_agentPid}" get CommandLine /format:csv`,
         { encoding: "utf8", timeout: 500, windowsHide: true }
-      ) : (0, import_child_process.execSync)(`ps -o command= -p ${_agentPid}`, { encoding: "utf8", timeout: 500 });
+      ) : readUnixCommandLine(_agentPid, 500);
       if (/\s(-p|--print)(\s|$)/.test(cmdOut)) _isHeadless = true;
     } catch {
     }

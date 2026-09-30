@@ -90,7 +90,9 @@ function shorten(p) {
   return p;
 }
 function esc(s) {
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  // Also escapes quotes: values are interpolated into attributes (data-sid="...")
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 const PRIO = { error:8, notification:7, sweeping:6, attention:5, carrying:4, juggling:4, working:3, thinking:2, idle:1, sleeping:0 };
 

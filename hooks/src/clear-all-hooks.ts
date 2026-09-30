@@ -5,6 +5,7 @@ import { unregisterCursorHooks } from "./cursor-install";
 import { unregisterGeminiHooks } from "./gemini-install";
 import { unregisterCodeflickerHooks } from "./codeflicker-install";
 import { unregisterCodeBuddyHooks } from "./codebuddy-install";
+import { unregisterCodexHooks } from "./codex-install";
 
 export interface ClearAllHooksResult {
   claudeCode: number;
@@ -12,6 +13,7 @@ export interface ClearAllHooksResult {
   gemini: number;
   codeflicker: number;
   codeBuddy: number;
+  codex: number;
   total: number;
 }
 
@@ -21,13 +23,15 @@ export function clearAllVigilCLIHooks(): ClearAllHooksResult {
   const gemini       = unregisterGeminiHooks();
   const codeflicker  = unregisterCodeflickerHooks();
   const codeBuddy    = unregisterCodeBuddyHooks();
+  const codex        = unregisterCodexHooks();
   return {
     claudeCode,
     cursor,
     gemini,
     codeflicker,
     codeBuddy,
-    total: claudeCode + cursor + gemini + codeflicker + codeBuddy,
+    codex,
+    total: claudeCode + cursor + gemini + codeflicker + codeBuddy + codex,
   };
 }
 
@@ -39,4 +43,5 @@ if (require.main === module) {
   console.log(`  Gemini:       ${result.gemini}`);
   console.log(`  Codeflicker:  ${result.codeflicker}`);
   console.log(`  CodeBuddy:    ${result.codeBuddy}`);
+  console.log(`  Codex:        ${result.codex}`);
 }

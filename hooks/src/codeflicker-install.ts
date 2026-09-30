@@ -3,9 +3,16 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { resolveNodeBin, readRuntimePort, DEFAULT_SERVER_PORT, buildPermissionUrl } from "./server-config";
-
-const HTTP_MARKER = "/permission";
+import {
+  AUTH_HEADER,
+  buildPermissionUrl,
+  DEFAULT_SERVER_PORT,
+  getOrCreateAuthToken,
+  isVigilCLIPermissionUrl,
+  readRuntimePort,
+  resolveNodeBin,
+} from "./server-config";
+import { resolveHookScriptPath, writeJsonAtomic } from "./shared/install-utils";
 
 const MARKER = "codeflicker-hook.js";
 
@@ -16,14 +23,26 @@ const CODEFLICKER_HOOK_EVENTS = [
   "PreCompact", "PermissionRequest", "Notification", "Setup",
 ];
 
+type HttpHookFields = { type?: string; url?: string; headers?: Record<string, unknown>; timeout?: number };
 type HookEntry = {
   command?: string;
-  hooks?: Array<{ command?: string; type?: string; url?: string; timeout?: number }>;
+  hooks?: Array<{ command?: string } & HttpHookFields>;
   matcher?: string;
-  type?: string;
-  url?: string;
-  timeout?: number;
-};
+} & HttpHookFields;
+
+/** Bring an owned http hook to the desired url/auth header. Returns true if modified. */
+function applyPermissionHook(hook: HttpHookFields, url: string, authToken: string | null): boolean {
+  let changed = false;
+  if (hook.url !== url) { hook.url = url; changed = true; }
+  if (authToken) {
+    const headers = hook.headers && typeof hook.headers === "object" && !Array.isArray(hook.headers) ? hook.headers : null;
+    if (!headers || headers[AUTH_HEADER] !== authToken) {
+      hook.headers = { ...(headers ?? {}), [AUTH_HEADER]: authToken };
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 function extractExistingNodeBin(config: Record<string, unknown>, marker: string): string | null {
   if (!config?.hooks) return null;
@@ -51,25 +70,13 @@ function extractExistingNodeBin(config: Record<string, unknown>, marker: string)
   return null;
 }
 
-function writeJsonAtomic(filePath: string, data: unknown): void {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmpPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.tmp`);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch {}
-    throw err;
-  }
-}
-
 interface RegisterCodeflickerHooksOptions {
   silent?: boolean;
   configPath?: string;
   nodeBin?: string | null;
   port?: number;
+  /** undefined → getOrCreateAuthToken(); null → no auth header */
+  authToken?: string | null;
 }
 
 export function registerCodeflickerHooks(
@@ -84,8 +91,7 @@ export function registerCodeflickerHooks(
     return { added: 0, skipped: 0, updated: 0 };
   }
 
-  let hookScript = path.resolve(__dirname, "..", "dist", "codeflicker-hook.js").replace(/\\/g, "/");
-  hookScript = hookScript.replace("app.asar/", "app.asar.unpacked/");
+  const hookScript = resolveHookScriptPath("codeflicker-hook.js", __dirname);
 
   let config: Record<string, unknown> = {};
   try {
@@ -101,6 +107,10 @@ export function registerCodeflickerHooks(
   const permUrl = buildPermissionUrl(
     Number.isInteger(options.port) ? options.port! : (readRuntimePort() ?? DEFAULT_SERVER_PORT),
   );
+
+  let authToken: string | null = null;
+  if (options.authToken !== undefined) authToken = options.authToken;
+  else { try { authToken = getOrCreateAuthToken(); } catch {} }
 
   if (!config.hooks || typeof config.hooks !== "object") config.hooks = {};
   const hooks = config.hooks as Record<string, HookEntry[]>;
@@ -144,9 +154,9 @@ export function registerCodeflickerHooks(
         if (!entry || typeof entry !== "object") continue;
         if (Array.isArray(entry.hooks)) {
           for (const h of entry.hooks) {
-            if (!h || h.type !== "http" || typeof h.url !== "string" || !h.url.includes(HTTP_MARKER)) continue;
+            if (!h || h.type !== "http" || !isVigilCLIPermissionUrl(h.url)) continue;
             httpFound = true;
-            if (h.url !== permUrl) { h.url = permUrl; updated++; changed = true; } else { skipped++; }
+            if (applyPermissionHook(h, permUrl, authToken)) { updated++; changed = true; } else { skipped++; }
             break;
           }
         }
@@ -154,11 +164,16 @@ export function registerCodeflickerHooks(
       }
       if (!httpFound) {
         // Inject into the first entry's hooks array (shared matcher entry)
-        const firstEntry = hooks[event][0];
-        if (firstEntry && Array.isArray(firstEntry.hooks)) {
-          firstEntry.hooks.push({ type: "http", url: permUrl, timeout: 600 });
+        const permHook: HttpHookFields = { type: "http", url: permUrl, timeout: 600 };
+        if (authToken) permHook.headers = { [AUTH_HEADER]: authToken };
+        // Inject into our own command entry (shared matcher), never into another tool's entry
+        const ownEntry = hooks[event].find((entry) =>
+          entry && typeof entry === "object" && Array.isArray(entry.hooks)
+          && entry.hooks.some((h) => !!h && typeof h.command === "string" && h.command.includes(MARKER)));
+        if (ownEntry && Array.isArray(ownEntry.hooks)) {
+          ownEntry.hooks.push(permHook);
         } else {
-          hooks[event].push({ matcher: "", hooks: [{ type: "http", url: permUrl, timeout: 600 }] });
+          hooks[event].push({ matcher: "", hooks: [permHook] });
         }
         added++; changed = true;
       }
@@ -188,13 +203,16 @@ export function unregisterCodeflickerHooks(configPath?: string): number {
     const next: HookEntry[] = [];
     for (const entry of arr) {
       if (!entry || typeof entry !== "object") { next.push(entry); continue; }
+      if (typeof entry.command === "string" && entry.command.includes(MARKER)) { removed++; changed = true; continue; }
       if (!Array.isArray(entry.hooks)) { next.push(entry); continue; }
       const filtered = entry.hooks.filter((h) => {
-        if (h.command?.includes(MARKER)) { removed++; changed = true; return false; }
-        if (h.type === "http" && h.url?.includes(HTTP_MARKER)) { removed++; changed = true; return false; }
+        if (!h || typeof h !== "object") return true;
+        if (typeof h.command === "string" && h.command.includes(MARKER)) { removed++; changed = true; return false; }
+        if (h.type === "http" && isVigilCLIPermissionUrl(h.url)) { removed++; changed = true; return false; }
         return true;
       });
-      if (filtered.length !== entry.hooks.length) changed = true;
+      if (filtered.length === entry.hooks.length) { next.push(entry); continue; }
+      changed = true;
       if (filtered.length === 0) continue; // drop empty entry
       next.push({ ...entry, hooks: filtered });
     }

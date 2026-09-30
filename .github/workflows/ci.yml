@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      # Tests and type-checking don't launch Electron; skip the ~100MB binary download.
+      # (electron's .d.ts typings ship in the npm package itself, so tsc still works.)
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build hooks
+        run: npm run build:hooks
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Verify committed compiled output is in sync with TypeScript sources
+        # src/ and agents/ are emitted by tsc; hooks/dist/ by esbuild. All are committed, so any drift means someone
+        # edited a .ts file without running `npm run build:all-ts`.
+        run: |
+          npm run build:all-ts
+          git status --porcelain -- src agents hooks test
+          git diff --exit-code -- src agents hooks test
+          untracked="$(git ls-files --others --exclude-standard -- src agents hooks test)"
+          if [ -n "$untracked" ]; then
+            echo "::error::Build produced untracked files (commit them or fix the build):"
+            echo "$untracked"
+            exit 1
+          fi

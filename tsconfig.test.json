@@ -1,0 +1,11 @@
+{
+  // Type-check tests (and the hook sources they import) without emitting:
+  // tests run through tsx, and emitting would drop stray .js files into test/
+  // and hooks/src/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "agents/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules"]
+}

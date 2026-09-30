@@ -4,6 +4,8 @@
 import type { AgentState } from "../constants/states";
 import type { RichHookEvent } from "../types/agent";
 
+const SESSION_ID_MAX = 200;
+
 /**
  * Parse a raw JSON body string from POST /state into a strongly-typed RichHookEvent.
  * Returns null if the JSON is invalid or the state field is unrecognised.
@@ -18,12 +20,14 @@ export function parseHookPayload(body: string, validStates: ReadonlySet<string>)
   } catch {
     return null;
   }
+  // `null` / arrays / primitives are valid JSON but would throw on destructuring
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
 
   const { state, session_id, event } = data;
 
   if (typeof state !== "string" || !validStates.has(state)) return null;
 
-  const sessionId = (typeof session_id === "string" && session_id) ? session_id : "default";
+  const sessionId = (typeof session_id === "string" && session_id) ? session_id.slice(0, SESSION_ID_MAX) : "default";
   const eventStr = typeof event === "string" ? event : "";
 
   // ── Core fields (mirrors existing server.ts parsing) ──

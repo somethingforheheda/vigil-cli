@@ -10,6 +10,7 @@ import {
   getPidChain,
   isHeadless,
 } from "./shared/find-terminal-pid";
+import { readTranscriptTitle, TITLE_EVENTS, trimToolInput } from "./shared/hook-payload";
 
 // Event → state mapping (single source of truth; mirrors agents/claude-code.ts eventMap)
 const EVENT_TO_STATE: Record<string, string> = {
@@ -64,29 +65,13 @@ process.stdin.on("end", () => {
     subagentId = String(payload.agent_id ?? "");
     const source = String(payload.source ?? payload.reason ?? "");
     const transcriptPath = String(payload.transcript_path ?? "");
-    if (transcriptPath) {
-      try {
-        const fs = require("fs") as typeof import("fs");
-        const stat = fs.statSync(transcriptPath);
-        if (stat.size < 5 * 1024 * 1024) {
-          const content = fs.readFileSync(transcriptPath, "utf8");
-          let lastCustom = "", lastAi = "";
-          for (const line of content.split("\n")) {
-            if (line.includes('"type":"custom-title"')) {
-              try { lastCustom = (JSON.parse(line) as Record<string, unknown>).customTitle as string ?? ""; } catch {}
-            } else if (line.includes('"type":"ai-title"')) {
-              try { lastAi = (JSON.parse(line) as Record<string, unknown>).aiTitle as string ?? ""; } catch {}
-            }
-          }
-          sessionTitle = lastCustom || lastAi;
-        }
-      } catch {}
-    }
+    // Title only changes around prompts/turn ends — avoid re-reading the transcript on every tool event
+    if (transcriptPath && TITLE_EVENTS.has(event)) sessionTitle = readTranscriptTitle(transcriptPath);
     void source; // used indirectly via resolvedState below
 
     // Extract rich hook fields
     const toolName = payload.tool_name != null ? String(payload.tool_name) : undefined;
-    const toolInput = payload.tool_input !== undefined ? payload.tool_input : undefined;
+    const toolInput = trimToolInput(payload.tool_input);
     const toolUseId = payload.tool_use_id != null ? String(payload.tool_use_id) : undefined;
     const error = payload.error != null ? String(payload.error) : undefined;
     const agentType = payload.agent_type != null ? String(payload.agent_type) : undefined;

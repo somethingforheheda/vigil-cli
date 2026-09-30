@@ -1,6 +1,5 @@
 "use strict";
 // src/main.ts — Electron main process for vigilCli
-// test comment
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -138,10 +137,18 @@ function savePrefs() {
         bubbleFollowWindow, hideBubbles, showSessionId, soundMuted, theme, fontSize, orbSize,
         windowOpacity, listCollapsed, sessionCap,
     };
+    // Atomic write: a crash mid-write must not wipe every preference
+    const tmp = `${PREFS_PATH}.${process.pid}.tmp`;
     try {
-        fs.writeFileSync(PREFS_PATH, JSON.stringify(data));
+        fs.writeFileSync(tmp, JSON.stringify(data));
+        fs.renameSync(tmp, PREFS_PATH);
     }
-    catch { /* ignore */ }
+    catch {
+        try {
+            fs.unlinkSync(tmp);
+        }
+        catch { /* ignore */ }
+    }
 }
 // ── alwaysOnTop / watchdog ──
 let topmostWatchdog = null;
@@ -257,9 +264,10 @@ const permCtx = {
         if (s && s.sourcePid)
             focusTerminalWindow(s.sourcePid, s.cwd, s.editor, s.pidChain);
     },
+    onPermissionResolved: (sessionId, behavior) => _state.onPermissionResolved(sessionId, behavior),
 };
 const _perm = (0, permission_1.initPermission)(permCtx);
-const { showPermissionBubble, resolvePermissionEntry, sendPermissionResponse, stackBubbles, permLog, PASSTHROUGH_TOOLS, showCodexNotifyBubble, clearCodexNotifyBubbles, syncPermissionShortcuts, } = _perm;
+const { showPermissionBubble, resolvePermissionEntry, dismissPermissionEntry, sendNoDecision, sendPermissionResponse, stackBubbles, permLog, PASSTHROUGH_TOOLS, showCodexNotifyBubble, clearCodexNotifyBubbles, syncPermissionShortcuts, } = _perm;
 const pendingPermissions = _perm.pendingPermissions;
 // ── State machine — delegated to src/state.ts ──
 const stateCtx = {
@@ -268,14 +276,16 @@ const stateCtx = {
     get pendingPermissions() { return pendingPermissions; },
     get showSessionId() { return showSessionId; },
     sendToRenderer: (channel, ...args) => {
-        // Pass through dnd-change so the list window DND bar updates
-        if (channel === ipc_channels_1.IpcChannels.DND_CHANGE && listWin && !listWin.isDestroyed())
-            listWin.webContents.send(ipc_channels_1.IpcChannels.DND_CHANGE, ...args);
+        // Pass through channels the list renderer listens to (DND bar, idle collapse)
+        if ((channel === ipc_channels_1.IpcChannels.DND_CHANGE || channel === ipc_channels_1.IpcChannels.COLLAPSE_TO_ORB)
+            && listWin && !listWin.isDestroyed())
+            listWin.webContents.send(channel, ...args);
     },
     playSound: (name) => playSound(name),
     t: (key) => t(key),
     focusTerminalWindow: (...args) => focusTerminalWindow(...args),
     resolvePermissionEntry: (...args) => resolvePermissionEntry(...args),
+    dismissPermissionEntry: (...args) => dismissPermissionEntry(...args),
     buildContextMenu: () => buildContextMenu(),
     buildTrayMenu: () => buildTrayMenu(),
     sendSessionsUpdate: () => sendSessionsUpdate(),
@@ -288,6 +298,9 @@ const VALID_STATES = _state.VALID_STATES;
 const _focus = (0, focus_1.initFocus)({ _allowSetForeground });
 const { initFocusHelper, focusTerminalWindow } = _focus;
 // ── HTTP server — delegated to src/server.ts ──
+// Codex sessions reported by native hooks (~/.codex/hooks.json). For those the
+// JSONL log monitor is redundant (and less accurate), so its events are dropped.
+const codexHookSessions = new Set();
 const serverCtx = {
     get autoStartWithClaude() { return autoStartWithClaude; },
     get dndEnabled() { return dndEnabled; },
@@ -296,11 +309,20 @@ const serverCtx = {
     get passthroughTools() { return PASSTHROUGH_TOOLS; },
     get validStates() { return VALID_STATES; },
     get sessions() { return sessions; },
-    applySessionEvent: (...args) => applySessionEvent(...args),
-    resolvePermissionEntry, sendPermissionResponse, showPermissionBubble, permLog,
+    applySessionEvent: (update) => {
+        if (update.agentId === "codex") {
+            codexHookSessions.add(update.sessionId);
+            if (codexHookSessions.size > 500)
+                codexHookSessions.delete(codexHookSessions.values().next().value);
+        }
+        applySessionEvent(update);
+    },
+    onHooksSynced: () => rebuildAllMenus(),
+    resolvePermissionEntry, dismissPermissionEntry, sendNoDecision,
+    sendPermissionResponse, showPermissionBubble, permLog,
 };
 const _server = (0, server_1.initServer)(serverCtx);
-const { startHttpServer, getHookServerPort } = _server;
+const { startHttpServer, getHookServerPort, suspendHookRestore, syncVigilCLIHooks, getCodexHooksStatus } = _server;
 // ── Menu — delegated to src/menu.ts ──
 const menuCtx = {
     get win() { return listWin; },
@@ -351,6 +373,9 @@ const menuCtx = {
     buildSessionSubmenu: () => buildSessionSubmenu(),
     savePrefs,
     getHookServerPort: () => getHookServerPort(),
+    suspendHookRestore: () => suspendHookRestore(),
+    syncVigilCLIHooks: () => syncVigilCLIHooks(),
+    getCodexHooksStatus: () => getCodexHooksStatus(),
     clampToScreen, getNearestWorkArea, reapplyMacVisibility,
 };
 const _menu = (0, menu_1.initMenu)(menuCtx);
@@ -386,7 +411,33 @@ function getUpdateMenuItem() {
     return { label: t("checkForUpdates"), click: () => checkForUpdates(true) };
 }
 // ── Send sessions snapshot to list window ──
+// Coalesced: bursts of hook events (or a Codex log catch-up) produce one IPC
+// message per frame instead of one per event, and unchanged snapshots are skipped.
+const SESSIONS_UPDATE_THROTTLE_MS = 50;
+const TOOL_INPUT_PREVIEW_MAX = 2000;
+let sessionsUpdateTimer = null;
+let lastSessionsPayload = "";
 function sendSessionsUpdate() {
+    if (sessionsUpdateTimer)
+        return;
+    sessionsUpdateTimer = setTimeout(() => {
+        sessionsUpdateTimer = null;
+        flushSessionsUpdate();
+    }, SESSIONS_UPDATE_THROTTLE_MS);
+}
+function previewToolInput(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input))
+        return input ?? null;
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+        if (typeof v === "string")
+            out[k] = v.length > TOOL_INPUT_PREVIEW_MAX ? v.slice(0, TOOL_INPUT_PREVIEW_MAX) + "\u2026" : v;
+        else if (v === null || typeof v !== "object")
+            out[k] = v;
+    }
+    return out;
+}
+function flushSessionsUpdate(force = false) {
     if (!listWin || listWin.isDestroyed())
         return;
     const arr = [];
@@ -402,7 +453,7 @@ function sendSessionsUpdate() {
             headless: s.headless ?? false,
             subagentCount: s.subagents ? s.subagents.size : 0,
             currentTool: s.currentTool ?? null,
-            currentToolInput: s.currentToolInput ?? null,
+            currentToolInput: previewToolInput(s.currentToolInput),
             lastError: s.lastError ?? null,
         });
     }
@@ -417,12 +468,14 @@ function sendSessionsUpdate() {
         });
         arr.splice(sessionCap);
     }
+    const payload = JSON.stringify(arr);
+    if (!force && payload === lastSessionsPayload)
+        return;
+    lastSessionsPayload = payload;
     listWin.webContents.send(ipc_channels_1.IpcChannels.SESSIONS_UPDATE, arr);
 }
 // ── VS Code / Cursor terminal-focus extension ──
 const EXT_ID = "vigilcli.vigilcli-terminal-focus";
-const EXT_VERSION = "0.1.0";
-const EXT_DIR_NAME = `${EXT_ID}-${EXT_VERSION}`;
 function installTerminalFocusExtension() {
     const os = require("os");
     const home = os.homedir();
@@ -430,6 +483,18 @@ function installTerminalFocusExtension() {
     extSrc = extSrc.replace("app.asar" + path.sep, "app.asar.unpacked" + path.sep);
     if (!fs.existsSync(extSrc))
         return;
+    // Versioned dir name: bumping the bundled extension's version installs the
+    // fixed copy for existing users instead of being skipped as "already there".
+    let extVersion = "0.0.0";
+    try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(extSrc, "package.json"), "utf8"));
+        if (typeof pkg.version === "string")
+            extVersion = pkg.version;
+    }
+    catch {
+        return;
+    }
+    const EXT_DIR_NAME = `${EXT_ID}-${extVersion}`;
     const targets = [
         path.join(home, ".vscode", "extensions"),
         path.join(home, ".cursor", "extensions"),
@@ -446,6 +511,15 @@ function installTerminalFocusExtension() {
             for (const file of filesToCopy)
                 fs.copyFileSync(path.join(extSrc, file), path.join(dest, file));
             console.log(`VigilCLI: installed terminal-focus extension to ${dest}`);
+            // Remove our older versions so VS Code doesn't load two copies
+            for (const name of fs.readdirSync(extRoot)) {
+                if (name.startsWith(`${EXT_ID}-`) && name !== EXT_DIR_NAME) {
+                    try {
+                        fs.rmSync(path.join(extRoot, name), { recursive: true, force: true });
+                    }
+                    catch { /* ignore */ }
+                }
+            }
         }
         catch (err) {
             console.warn(`VigilCLI: failed to install extension to ${dest}:`, err.message);
@@ -754,7 +828,7 @@ function createWindow() {
     });
     // ── Renderer ready ──
     listWin.webContents.on("did-finish-load", () => {
-        sendSessionsUpdate();
+        flushSessionsUpdate(true);
         if (dndEnabled)
             listWin.webContents.send(ipc_channels_1.IpcChannels.DND_CHANGE, true);
         listWin.webContents.send(ipc_channels_1.IpcChannels.APPLY_PREFS, { theme, fontSize, orbSize, collapsed: listCollapsed, windowOpacity });
@@ -776,9 +850,21 @@ function createWindow() {
         }
     });
     // Crash recovery
+    // Bounded: a deterministic crash (e.g. OOM) must not turn into a reload loop
+    const crashTimes = [];
     listWin.webContents.on("render-process-gone", (_, details) => {
         console.error("VigilCLI: listWin crashed:", details.reason);
-        listWin.webContents.reload();
+        const now = Date.now();
+        while (crashTimes.length && now - crashTimes[0] > 60_000)
+            crashTimes.shift();
+        crashTimes.push(now);
+        if (crashTimes.length > 3) {
+            console.error("VigilCLI: listWin crashed too often — not reloading");
+            return;
+        }
+        const delay = 500 * 2 ** (crashTimes.length - 1);
+        setTimeout(() => { if (listWin && !listWin.isDestroyed())
+            listWin.webContents.reload(); }, delay);
     });
     // Prevent accidental close (Cmd+W on macOS, Alt+F4 on Windows, etc.)
     listWin.on("close", (event) => {
@@ -826,6 +912,16 @@ else {
         }
         reapplyMacVisibility();
     });
+    // Renderers only ever show local files: block navigation (e.g. a link or file
+    // dropped onto a window) and window.open so the preload bridge can't be
+    // exposed to foreign content.
+    electron_1.app.on("web-contents-created", (_event, contents) => {
+        contents.on("will-navigate", (e, url) => {
+            if (!url.startsWith("file://"))
+                e.preventDefault();
+        });
+        contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    });
     if (isMac && electron_1.app.dock) {
         const prefs = loadPrefs();
         if (prefs?.showDock !== true)
@@ -839,6 +935,9 @@ else {
         // Codex CLI JSONL log monitor
         try {
             _codexMonitor = new codex_log_monitor_1.CodexLogMonitor(codex_1.default, (sid, state, event, extra) => {
+                // Native Codex hooks already drive this session
+                if (codexHookSessions.has(sid))
+                    return;
                 if (state === "codex-permission") {
                     applySessionEvent({
                         sessionId: sid,
@@ -859,6 +958,9 @@ else {
                     agentId: "codex",
                     title: extra.title ?? null,
                 });
+            }, {
+                // Title changes must not replay the last state (duplicate completion sounds)
+                onTitleChange: (sid, title) => _state.updateSessionTitle(sid, title),
             });
             _codexMonitor.start();
         }
