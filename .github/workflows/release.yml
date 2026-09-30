@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: package (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: mac
+            command: npm run build:mac -- --arm64 --publish never
+          - os: windows-2022
+            platform: win
+            command: npm run build:win -- --x64 --publish never
+          - os: ubuntu-22.04
+            platform: linux
+            command: npm run build:linux -- --x64 --publish never
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check release version
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "v" + require("./package.json").version) throw new Error("Tag and package version differ")'
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile and type-check
+        run: |
+          npm run build
+          npm run typecheck
+          git diff --exit-code -- src agents hooks
+          test -z "$(git ls-files --others --exclude-standard -- src agents hooks)"
+      - name: Test
+        # The existing test suite supports macOS/Linux. Windows UI issue
+        # verification remains a separate manual check.
+        if: runner.os != 'Windows'
+        run: npm test
+      - name: Package
+        run: ${{ matrix.command }}
+      - name: Verify installer files and update metadata
+        run: node scripts/verify-release-artifacts.cjs ${{ matrix.platform }}
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+            dist/latest*.yml
+
+  publish:
+    name: Publish complete release
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: release-artifacts
+      - name: Upload all assets before making the release public
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const version = require(path.join(process.env.GITHUB_WORKSPACE, 'package.json')).version;
+            const tag = context.ref.replace('refs/tags/', '');
+            if (tag !== `v${version}`) throw new Error('Tag and package version differ');
+            const dir = path.join(process.env.GITHUB_WORKSPACE, 'release-artifacts');
+            const files = fs.readdirSync(dir).filter(name => /\.(dmg|exe|AppImage|deb|blockmap|yml)$/.test(name));
+            const required = [
+              'latest-mac.yml', 'latest.yml', 'latest-linux.yml',
+              `VigilCLI-${version}-arm64.dmg`, `VigilCLI-${version}-arm64.dmg.blockmap`,
+              `VigilCLI-Setup-${version}.exe`, `VigilCLI-Setup-${version}.exe.blockmap`,
+              `VigilCLI-${version}.AppImage`, `vigil-cli_${version}_amd64.deb`,
+            ];
+            for (const name of required) {
+              if (!files.includes(name) || fs.statSync(path.join(dir, name)).size === 0) {
+                throw new Error(`Missing release asset: ${name}`);
+              }
+            }
+            const notes = path.join(process.env.GITHUB_WORKSPACE, '.github', 'release-notes', `${tag}.md`);
+            const body = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : `Release ${tag}`;
+            const repo = context.repo;
+            const releases = await github.paginate(github.rest.repos.listReleases, { ...repo, per_page: 100 });
+            let release = releases.find(item => item.tag_name === tag);
+            if (release && !release.draft) throw new Error(`${tag} is already published; refusing to replace it`);
+            if (!release) {
+              release = (await github.rest.repos.createRelease({
+                ...repo, tag_name: tag, target_commitish: context.sha,
+                name: tag, body, draft: true, prerelease: false,
+              })).data;
+            }
+            const existingAssets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              ...repo, release_id: release.id, per_page: 100,
+            });
+            for (const name of files) {
+              const existing = existingAssets.find(asset => asset.name === name);
+              if (existing) await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: existing.id });
+              const data = fs.readFileSync(path.join(dir, name));
+              await github.rest.repos.uploadReleaseAsset({
+                ...repo, release_id: release.id, name, data,
+                headers: { 'content-type': 'application/octet-stream', 'content-length': data.length },
+              });
+              core.info(`Uploaded ${name}`);
+            }
+            const uploaded = await github.paginate(github.rest.repos.listReleaseAssets, {
+              ...repo, release_id: release.id, per_page: 100,
+            });
+            for (const name of files) {
+              const asset = uploaded.find(item => item.name === name);
+              if (!asset || asset.size !== fs.statSync(path.join(dir, name)).size) {
+                throw new Error(`Release asset verification failed: ${name}`);
+              }
+            }
+            const result = await github.rest.repos.updateRelease({
+              ...repo, release_id: release.id, name: tag, body, draft: false,
+              prerelease: false, make_latest: 'true',
+            });
+            core.info(`Published ${result.data.html_url}`);
